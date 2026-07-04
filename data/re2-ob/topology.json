@@ -1,0 +1,75 @@
+{
+  "dataset": "Online Boutique (RCA-Eval RE2-OB)",
+  "note": "Common service call graph; total_calls is summed over processed cases.",
+  "services": [
+    "checkoutservice",
+    "currencyservice",
+    "emailservice",
+    "frontend",
+    "paymentservice",
+    "productcatalogservice",
+    "recommendationservice"
+  ],
+  "edges": [
+    {
+      "caller": "checkoutservice",
+      "callee": "checkoutservice",
+      "total_calls": 481560
+    },
+    {
+      "caller": "checkoutservice",
+      "callee": "currencyservice",
+      "total_calls": 196453
+    },
+    {
+      "caller": "checkoutservice",
+      "callee": "emailservice",
+      "total_calls": 56820
+    },
+    {
+      "caller": "checkoutservice",
+      "callee": "paymentservice",
+      "total_calls": 56917
+    },
+    {
+      "caller": "checkoutservice",
+      "callee": "productcatalogservice",
+      "total_calls": 139396
+    },
+    {
+      "caller": "frontend",
+      "callee": "checkoutservice",
+      "total_calls": 57100
+    },
+    {
+      "caller": "frontend",
+      "callee": "currencyservice",
+      "total_calls": 4626501
+    },
+    {
+      "caller": "frontend",
+      "callee": "frontend",
+      "total_calls": 15896769
+    },
+    {
+      "caller": "frontend",
+      "callee": "productcatalogservice",
+      "total_calls": 7378153
+    },
+    {
+      "caller": "frontend",
+      "callee": "recommendationservice",
+      "total_calls": 1133251
+    },
+    {
+      "caller": "recommendationservice",
+      "callee": "productcatalogservice",
+      "total_calls": 1130870
+    },
+    {
+      "caller": "recommendationservice",
+      "callee": "recommendationservice",
+      "total_calls": 1133506
+    }
+  ]
+}

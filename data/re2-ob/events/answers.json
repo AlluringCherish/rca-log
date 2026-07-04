@@ -1,0 +1,905 @@
+{
+  "dataset": "RCA-Eval RE2-OB",
+  "cases": [
+    {
+      "problem_id": "problem_000001",
+      "source_name": "checkoutservice_cpu_1",
+      "service": "checkoutservice",
+      "fault": "cpu",
+      "run": "1",
+      "answer_rank": "checkoutservice_cpu",
+      "inject_time_unix": 1705354566,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_cpu/1"
+    },
+    {
+      "problem_id": "problem_000002",
+      "source_name": "checkoutservice_cpu_2",
+      "service": "checkoutservice",
+      "fault": "cpu",
+      "run": "2",
+      "answer_rank": "checkoutservice_cpu",
+      "inject_time_unix": 1708475361,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_cpu/2"
+    },
+    {
+      "problem_id": "problem_000003",
+      "source_name": "checkoutservice_cpu_3",
+      "service": "checkoutservice",
+      "fault": "cpu",
+      "run": "3",
+      "answer_rank": "checkoutservice_cpu",
+      "inject_time_unix": 1705623539,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_cpu/3"
+    },
+    {
+      "problem_id": "problem_000004",
+      "source_name": "checkoutservice_delay_1",
+      "service": "checkoutservice",
+      "fault": "delay",
+      "run": "1",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1705666511,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_delay/1"
+    },
+    {
+      "problem_id": "problem_000005",
+      "source_name": "checkoutservice_delay_2",
+      "service": "checkoutservice",
+      "fault": "delay",
+      "run": "2",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1705668921,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_delay/2"
+    },
+    {
+      "problem_id": "problem_000006",
+      "source_name": "checkoutservice_delay_3",
+      "service": "checkoutservice",
+      "fault": "delay",
+      "run": "3",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1705671342,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_delay/3"
+    },
+    {
+      "problem_id": "problem_000007",
+      "source_name": "checkoutservice_disk_1",
+      "service": "checkoutservice",
+      "fault": "disk",
+      "run": "1",
+      "answer_rank": "checkoutservice_diskio",
+      "inject_time_unix": 1705373910,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_disk/1"
+    },
+    {
+      "problem_id": "problem_000008",
+      "source_name": "checkoutservice_disk_2",
+      "service": "checkoutservice",
+      "fault": "disk",
+      "run": "2",
+      "answer_rank": "checkoutservice_diskio",
+      "inject_time_unix": 1705765528,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_disk/2"
+    },
+    {
+      "problem_id": "problem_000009",
+      "source_name": "checkoutservice_disk_3",
+      "service": "checkoutservice",
+      "fault": "disk",
+      "run": "3",
+      "answer_rank": "checkoutservice_diskio",
+      "inject_time_unix": 1705767825,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_disk/3"
+    },
+    {
+      "problem_id": "problem_000010",
+      "source_name": "checkoutservice_loss_1",
+      "service": "checkoutservice",
+      "fault": "loss",
+      "run": "1",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1705376266,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_loss/1"
+    },
+    {
+      "problem_id": "problem_000011",
+      "source_name": "checkoutservice_loss_2",
+      "service": "checkoutservice",
+      "fault": "loss",
+      "run": "2",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1705673762,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_loss/2"
+    },
+    {
+      "problem_id": "problem_000012",
+      "source_name": "checkoutservice_loss_3",
+      "service": "checkoutservice",
+      "fault": "loss",
+      "run": "3",
+      "answer_rank": "checkoutservice_latency",
+      "inject_time_unix": 1708489141,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_loss/3"
+    },
+    {
+      "problem_id": "problem_000013",
+      "source_name": "checkoutservice_mem_1",
+      "service": "checkoutservice",
+      "fault": "mem",
+      "run": "1",
+      "answer_rank": "checkoutservice_mem",
+      "inject_time_unix": 1705462070,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_mem/1"
+    },
+    {
+      "problem_id": "problem_000014",
+      "source_name": "checkoutservice_mem_2",
+      "service": "checkoutservice",
+      "fault": "mem",
+      "run": "2",
+      "answer_rank": "checkoutservice_mem",
+      "inject_time_unix": 1705626077,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_mem/2"
+    },
+    {
+      "problem_id": "problem_000015",
+      "source_name": "checkoutservice_mem_3",
+      "service": "checkoutservice",
+      "fault": "mem",
+      "run": "3",
+      "answer_rank": "checkoutservice_mem",
+      "inject_time_unix": 1705627856,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_mem/3"
+    },
+    {
+      "problem_id": "problem_000016",
+      "source_name": "checkoutservice_socket_1",
+      "service": "checkoutservice",
+      "fault": "socket",
+      "run": "1",
+      "answer_rank": "checkoutservice_socket",
+      "inject_time_unix": 1705656313,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_socket/1"
+    },
+    {
+      "problem_id": "problem_000017",
+      "source_name": "checkoutservice_socket_2",
+      "service": "checkoutservice",
+      "fault": "socket",
+      "run": "2",
+      "answer_rank": "checkoutservice_socket",
+      "inject_time_unix": 1705660355,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_socket/2"
+    },
+    {
+      "problem_id": "problem_000018",
+      "source_name": "checkoutservice_socket_3",
+      "service": "checkoutservice",
+      "fault": "socket",
+      "run": "3",
+      "answer_rank": "checkoutservice_socket",
+      "inject_time_unix": 1705664091,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/checkoutservice_socket/3"
+    },
+    {
+      "problem_id": "problem_000019",
+      "source_name": "currencyservice_cpu_1",
+      "service": "currencyservice",
+      "fault": "cpu",
+      "run": "1",
+      "answer_rank": "currencyservice_cpu",
+      "inject_time_unix": 1705682817,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_cpu/1"
+    },
+    {
+      "problem_id": "problem_000020",
+      "source_name": "currencyservice_cpu_2",
+      "service": "currencyservice",
+      "fault": "cpu",
+      "run": "2",
+      "answer_rank": "currencyservice_cpu",
+      "inject_time_unix": 1705685216,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_cpu/2"
+    },
+    {
+      "problem_id": "problem_000021",
+      "source_name": "currencyservice_cpu_3",
+      "service": "currencyservice",
+      "fault": "cpu",
+      "run": "3",
+      "answer_rank": "currencyservice_cpu",
+      "inject_time_unix": 1705687618,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_cpu/3"
+    },
+    {
+      "problem_id": "problem_000022",
+      "source_name": "currencyservice_delay_1",
+      "service": "currencyservice",
+      "fault": "delay",
+      "run": "1",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705702012,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_delay/1"
+    },
+    {
+      "problem_id": "problem_000023",
+      "source_name": "currencyservice_delay_2",
+      "service": "currencyservice",
+      "fault": "delay",
+      "run": "2",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705704343,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_delay/2"
+    },
+    {
+      "problem_id": "problem_000024",
+      "source_name": "currencyservice_delay_3",
+      "service": "currencyservice",
+      "fault": "delay",
+      "run": "3",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705706604,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_delay/3"
+    },
+    {
+      "problem_id": "problem_000025",
+      "source_name": "currencyservice_disk_1",
+      "service": "currencyservice",
+      "fault": "disk",
+      "run": "1",
+      "answer_rank": "currencyservice_diskio",
+      "inject_time_unix": 1705386669,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_disk/1"
+    },
+    {
+      "problem_id": "problem_000026",
+      "source_name": "currencyservice_disk_2",
+      "service": "currencyservice",
+      "fault": "disk",
+      "run": "2",
+      "answer_rank": "currencyservice_diskio",
+      "inject_time_unix": 1705692434,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_disk/2"
+    },
+    {
+      "problem_id": "problem_000027",
+      "source_name": "currencyservice_disk_3",
+      "service": "currencyservice",
+      "fault": "disk",
+      "run": "3",
+      "answer_rank": "currencyservice_diskio",
+      "inject_time_unix": 1705694833,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_disk/3"
+    },
+    {
+      "problem_id": "problem_000028",
+      "source_name": "currencyservice_loss_1",
+      "service": "currencyservice",
+      "fault": "loss",
+      "run": "1",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705388941,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_loss/1"
+    },
+    {
+      "problem_id": "problem_000029",
+      "source_name": "currencyservice_loss_2",
+      "service": "currencyservice",
+      "fault": "loss",
+      "run": "2",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705708871,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_loss/2"
+    },
+    {
+      "problem_id": "problem_000030",
+      "source_name": "currencyservice_loss_3",
+      "service": "currencyservice",
+      "fault": "loss",
+      "run": "3",
+      "answer_rank": "currencyservice_latency",
+      "inject_time_unix": 1705711158,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_loss/3"
+    },
+    {
+      "problem_id": "problem_000031",
+      "source_name": "currencyservice_mem_1",
+      "service": "currencyservice",
+      "fault": "mem",
+      "run": "1",
+      "answer_rank": "currencyservice_mem",
+      "inject_time_unix": 1705464519,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_mem/1"
+    },
+    {
+      "problem_id": "problem_000032",
+      "source_name": "currencyservice_mem_2",
+      "service": "currencyservice",
+      "fault": "mem",
+      "run": "2",
+      "answer_rank": "currencyservice_mem",
+      "inject_time_unix": 1705749889,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_mem/2"
+    },
+    {
+      "problem_id": "problem_000033",
+      "source_name": "currencyservice_mem_3",
+      "service": "currencyservice",
+      "fault": "mem",
+      "run": "3",
+      "answer_rank": "currencyservice_mem",
+      "inject_time_unix": 1705690057,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_mem/3"
+    },
+    {
+      "problem_id": "problem_000034",
+      "source_name": "currencyservice_socket_1",
+      "service": "currencyservice",
+      "fault": "socket",
+      "run": "1",
+      "answer_rank": "currencyservice_socket",
+      "inject_time_unix": 1705479661,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_socket/1"
+    },
+    {
+      "problem_id": "problem_000035",
+      "source_name": "currencyservice_socket_2",
+      "service": "currencyservice",
+      "fault": "socket",
+      "run": "2",
+      "answer_rank": "currencyservice_socket",
+      "inject_time_unix": 1705697241,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_socket/2"
+    },
+    {
+      "problem_id": "problem_000036",
+      "source_name": "currencyservice_socket_3",
+      "service": "currencyservice",
+      "fault": "socket",
+      "run": "3",
+      "answer_rank": "currencyservice_socket",
+      "inject_time_unix": 1705699619,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/currencyservice_socket/3"
+    },
+    {
+      "problem_id": "problem_000037",
+      "source_name": "emailservice_cpu_1",
+      "service": "emailservice",
+      "fault": "cpu",
+      "run": "1",
+      "answer_rank": "emailservice_cpu",
+      "inject_time_unix": 1705350165,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_cpu/1"
+    },
+    {
+      "problem_id": "problem_000038",
+      "source_name": "emailservice_cpu_2",
+      "service": "emailservice",
+      "fault": "cpu",
+      "run": "2",
+      "answer_rank": "emailservice_cpu",
+      "inject_time_unix": 1705592998,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_cpu/2"
+    },
+    {
+      "problem_id": "problem_000039",
+      "source_name": "emailservice_cpu_3",
+      "service": "emailservice",
+      "fault": "cpu",
+      "run": "3",
+      "answer_rank": "emailservice_cpu",
+      "inject_time_unix": 1705595469,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_cpu/3"
+    },
+    {
+      "problem_id": "problem_000040",
+      "source_name": "emailservice_delay_1",
+      "service": "emailservice",
+      "fault": "delay",
+      "run": "1",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705733346,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_delay/1"
+    },
+    {
+      "problem_id": "problem_000041",
+      "source_name": "emailservice_delay_2",
+      "service": "emailservice",
+      "fault": "delay",
+      "run": "2",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705735702,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_delay/2"
+    },
+    {
+      "problem_id": "problem_000042",
+      "source_name": "emailservice_delay_3",
+      "service": "emailservice",
+      "fault": "delay",
+      "run": "3",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705738059,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_delay/3"
+    },
+    {
+      "problem_id": "problem_000043",
+      "source_name": "emailservice_disk_1",
+      "service": "emailservice",
+      "fault": "disk",
+      "run": "1",
+      "answer_rank": "emailservice_diskio",
+      "inject_time_unix": 1705370095,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_disk/1"
+    },
+    {
+      "problem_id": "problem_000044",
+      "source_name": "emailservice_disk_2",
+      "service": "emailservice",
+      "fault": "disk",
+      "run": "2",
+      "answer_rank": "emailservice_diskio",
+      "inject_time_unix": 1705602964,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_disk/2"
+    },
+    {
+      "problem_id": "problem_000045",
+      "source_name": "emailservice_disk_3",
+      "service": "emailservice",
+      "fault": "disk",
+      "run": "3",
+      "answer_rank": "emailservice_diskio",
+      "inject_time_unix": 1705719294,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_disk/3"
+    },
+    {
+      "problem_id": "problem_000046",
+      "source_name": "emailservice_loss_1",
+      "service": "emailservice",
+      "fault": "loss",
+      "run": "1",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705351632,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_loss/1"
+    },
+    {
+      "problem_id": "problem_000047",
+      "source_name": "emailservice_loss_2",
+      "service": "emailservice",
+      "fault": "loss",
+      "run": "2",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705740414,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_loss/2"
+    },
+    {
+      "problem_id": "problem_000048",
+      "source_name": "emailservice_loss_3",
+      "service": "emailservice",
+      "fault": "loss",
+      "run": "3",
+      "answer_rank": "emailservice_latency",
+      "inject_time_unix": 1705742773,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_loss/3"
+    },
+    {
+      "problem_id": "problem_000049",
+      "source_name": "emailservice_mem_1",
+      "service": "emailservice",
+      "fault": "mem",
+      "run": "1",
+      "answer_rank": "emailservice_mem",
+      "inject_time_unix": 1705475505,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_mem/1"
+    },
+    {
+      "problem_id": "problem_000050",
+      "source_name": "emailservice_mem_2",
+      "service": "emailservice",
+      "fault": "mem",
+      "run": "2",
+      "answer_rank": "emailservice_mem",
+      "inject_time_unix": 1705597985,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_mem/2"
+    },
+    {
+      "problem_id": "problem_000051",
+      "source_name": "emailservice_mem_3",
+      "service": "emailservice",
+      "fault": "mem",
+      "run": "3",
+      "answer_rank": "emailservice_mem",
+      "inject_time_unix": 1705600502,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_mem/3"
+    },
+    {
+      "problem_id": "problem_000052",
+      "source_name": "emailservice_socket_1",
+      "service": "emailservice",
+      "fault": "socket",
+      "run": "1",
+      "answer_rank": "emailservice_socket",
+      "inject_time_unix": 1705726260,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_socket/1"
+    },
+    {
+      "problem_id": "problem_000053",
+      "source_name": "emailservice_socket_2",
+      "service": "emailservice",
+      "fault": "socket",
+      "run": "2",
+      "answer_rank": "emailservice_socket",
+      "inject_time_unix": 1705728625,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_socket/2"
+    },
+    {
+      "problem_id": "problem_000054",
+      "source_name": "emailservice_socket_3",
+      "service": "emailservice",
+      "fault": "socket",
+      "run": "3",
+      "answer_rank": "emailservice_socket",
+      "inject_time_unix": 1705730978,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/emailservice_socket/3"
+    },
+    {
+      "problem_id": "problem_000055",
+      "source_name": "productcatalogservice_cpu_1",
+      "service": "productcatalogservice",
+      "fault": "cpu",
+      "run": "1",
+      "answer_rank": "productcatalogservice_cpu",
+      "inject_time_unix": 1705340542,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_cpu/1"
+    },
+    {
+      "problem_id": "problem_000056",
+      "source_name": "productcatalogservice_cpu_2",
+      "service": "productcatalogservice",
+      "fault": "cpu",
+      "run": "2",
+      "answer_rank": "productcatalogservice_cpu",
+      "inject_time_unix": 1705486848,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_cpu/2"
+    },
+    {
+      "problem_id": "problem_000057",
+      "source_name": "productcatalogservice_cpu_3",
+      "service": "productcatalogservice",
+      "fault": "cpu",
+      "run": "3",
+      "answer_rank": "productcatalogservice_cpu",
+      "inject_time_unix": 1705489222,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_cpu/3"
+    },
+    {
+      "problem_id": "problem_000058",
+      "source_name": "productcatalogservice_delay_1",
+      "service": "productcatalogservice",
+      "fault": "delay",
+      "run": "1",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705394578,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_delay/1"
+    },
+    {
+      "problem_id": "problem_000059",
+      "source_name": "productcatalogservice_delay_2",
+      "service": "productcatalogservice",
+      "fault": "delay",
+      "run": "2",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705514496,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_delay/2"
+    },
+    {
+      "problem_id": "problem_000060",
+      "source_name": "productcatalogservice_delay_3",
+      "service": "productcatalogservice",
+      "fault": "delay",
+      "run": "3",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705516829,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_delay/3"
+    },
+    {
+      "problem_id": "problem_000061",
+      "source_name": "productcatalogservice_disk_1",
+      "service": "productcatalogservice",
+      "fault": "disk",
+      "run": "1",
+      "answer_rank": "productcatalogservice_diskio",
+      "inject_time_unix": 1705360699,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_disk/1"
+    },
+    {
+      "problem_id": "problem_000062",
+      "source_name": "productcatalogservice_disk_2",
+      "service": "productcatalogservice",
+      "fault": "disk",
+      "run": "2",
+      "answer_rank": "productcatalogservice_diskio",
+      "inject_time_unix": 1705496111,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_disk/2"
+    },
+    {
+      "problem_id": "problem_000063",
+      "source_name": "productcatalogservice_disk_3",
+      "service": "productcatalogservice",
+      "fault": "disk",
+      "run": "3",
+      "answer_rank": "productcatalogservice_diskio",
+      "inject_time_unix": 1708472972,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_disk/3"
+    },
+    {
+      "problem_id": "problem_000064",
+      "source_name": "productcatalogservice_loss_1",
+      "service": "productcatalogservice",
+      "fault": "loss",
+      "run": "1",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705342830,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_loss/1"
+    },
+    {
+      "problem_id": "problem_000065",
+      "source_name": "productcatalogservice_loss_2",
+      "service": "productcatalogservice",
+      "fault": "loss",
+      "run": "2",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705519114,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_loss/2"
+    },
+    {
+      "problem_id": "problem_000066",
+      "source_name": "productcatalogservice_loss_3",
+      "service": "productcatalogservice",
+      "fault": "loss",
+      "run": "3",
+      "answer_rank": "productcatalogservice_latency",
+      "inject_time_unix": 1705717097,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_loss/3"
+    },
+    {
+      "problem_id": "problem_000067",
+      "source_name": "productcatalogservice_mem_1",
+      "service": "productcatalogservice",
+      "fault": "mem",
+      "run": "1",
+      "answer_rank": "productcatalogservice_mem",
+      "inject_time_unix": 1705357616,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_mem/1"
+    },
+    {
+      "problem_id": "problem_000068",
+      "source_name": "productcatalogservice_mem_2",
+      "service": "productcatalogservice",
+      "fault": "mem",
+      "run": "2",
+      "answer_rank": "productcatalogservice_mem",
+      "inject_time_unix": 1705491651,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_mem/2"
+    },
+    {
+      "problem_id": "problem_000069",
+      "source_name": "productcatalogservice_mem_3",
+      "service": "productcatalogservice",
+      "fault": "mem",
+      "run": "3",
+      "answer_rank": "productcatalogservice_mem",
+      "inject_time_unix": 1705493908,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_mem/3"
+    },
+    {
+      "problem_id": "problem_000070",
+      "source_name": "productcatalogservice_socket_1",
+      "service": "productcatalogservice",
+      "fault": "socket",
+      "run": "1",
+      "answer_rank": "productcatalogservice_socket",
+      "inject_time_unix": 1705392233,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_socket/1"
+    },
+    {
+      "problem_id": "problem_000071",
+      "source_name": "productcatalogservice_socket_2",
+      "service": "productcatalogservice",
+      "fault": "socket",
+      "run": "2",
+      "answer_rank": "productcatalogservice_socket",
+      "inject_time_unix": 1705509677,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_socket/2"
+    },
+    {
+      "problem_id": "problem_000072",
+      "source_name": "productcatalogservice_socket_3",
+      "service": "productcatalogservice",
+      "fault": "socket",
+      "run": "3",
+      "answer_rank": "productcatalogservice_socket",
+      "inject_time_unix": 1705512067,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/productcatalogservice_socket/3"
+    },
+    {
+      "problem_id": "problem_000073",
+      "source_name": "recommendationservice_cpu_1",
+      "service": "recommendationservice",
+      "fault": "cpu",
+      "run": "1",
+      "answer_rank": "recommendationservice_cpu",
+      "inject_time_unix": 1705345765,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_cpu/1"
+    },
+    {
+      "problem_id": "problem_000074",
+      "source_name": "recommendationservice_cpu_2",
+      "service": "recommendationservice",
+      "fault": "cpu",
+      "run": "2",
+      "answer_rank": "recommendationservice_cpu",
+      "inject_time_unix": 1705525832,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_cpu/2"
+    },
+    {
+      "problem_id": "problem_000075",
+      "source_name": "recommendationservice_cpu_3",
+      "service": "recommendationservice",
+      "fault": "cpu",
+      "run": "3",
+      "answer_rank": "recommendationservice_cpu",
+      "inject_time_unix": 1705528257,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_cpu/3"
+    },
+    {
+      "problem_id": "problem_000076",
+      "source_name": "recommendationservice_delay_1",
+      "service": "recommendationservice",
+      "fault": "delay",
+      "run": "1",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705400377,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_delay/1"
+    },
+    {
+      "problem_id": "problem_000077",
+      "source_name": "recommendationservice_delay_2",
+      "service": "recommendationservice",
+      "fault": "delay",
+      "run": "2",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705545315,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_delay/2"
+    },
+    {
+      "problem_id": "problem_000078",
+      "source_name": "recommendationservice_delay_3",
+      "service": "recommendationservice",
+      "fault": "delay",
+      "run": "3",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705547762,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_delay/3"
+    },
+    {
+      "problem_id": "problem_000079",
+      "source_name": "recommendationservice_disk_1",
+      "service": "recommendationservice",
+      "fault": "disk",
+      "run": "1",
+      "answer_rank": "recommendationservice_diskio",
+      "inject_time_unix": 1705366522,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_disk/1"
+    },
+    {
+      "problem_id": "problem_000080",
+      "source_name": "recommendationservice_disk_2",
+      "service": "recommendationservice",
+      "fault": "disk",
+      "run": "2",
+      "answer_rank": "recommendationservice_diskio",
+      "inject_time_unix": 1705535461,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_disk/2"
+    },
+    {
+      "problem_id": "problem_000081",
+      "source_name": "recommendationservice_disk_3",
+      "service": "recommendationservice",
+      "fault": "disk",
+      "run": "3",
+      "answer_rank": "recommendationservice_diskio",
+      "inject_time_unix": 1705537934,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_disk/3"
+    },
+    {
+      "problem_id": "problem_000082",
+      "source_name": "recommendationservice_loss_1",
+      "service": "recommendationservice",
+      "fault": "loss",
+      "run": "1",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705347231,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_loss/1"
+    },
+    {
+      "problem_id": "problem_000083",
+      "source_name": "recommendationservice_loss_2",
+      "service": "recommendationservice",
+      "fault": "loss",
+      "run": "2",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705583459,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_loss/2"
+    },
+    {
+      "problem_id": "problem_000084",
+      "source_name": "recommendationservice_loss_3",
+      "service": "recommendationservice",
+      "fault": "loss",
+      "run": "3",
+      "answer_rank": "recommendationservice_latency",
+      "inject_time_unix": 1705757332,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_loss/3"
+    },
+    {
+      "problem_id": "problem_000085",
+      "source_name": "recommendationservice_mem_1",
+      "service": "recommendationservice",
+      "fault": "mem",
+      "run": "1",
+      "answer_rank": "recommendationservice_mem",
+      "inject_time_unix": 1705458232,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_mem/1"
+    },
+    {
+      "problem_id": "problem_000086",
+      "source_name": "recommendationservice_mem_2",
+      "service": "recommendationservice",
+      "fault": "mem",
+      "run": "2",
+      "answer_rank": "recommendationservice_mem",
+      "inject_time_unix": 1705530692,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_mem/2"
+    },
+    {
+      "problem_id": "problem_000087",
+      "source_name": "recommendationservice_mem_3",
+      "service": "recommendationservice",
+      "fault": "mem",
+      "run": "3",
+      "answer_rank": "recommendationservice_mem",
+      "inject_time_unix": 1705533073,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_mem/3"
+    },
+    {
+      "problem_id": "problem_000088",
+      "source_name": "recommendationservice_socket_1",
+      "service": "recommendationservice",
+      "fault": "socket",
+      "run": "1",
+      "answer_rank": "recommendationservice_socket",
+      "inject_time_unix": 1705398242,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_socket/1"
+    },
+    {
+      "problem_id": "problem_000089",
+      "source_name": "recommendationservice_socket_2",
+      "service": "recommendationservice",
+      "fault": "socket",
+      "run": "2",
+      "answer_rank": "recommendationservice_socket",
+      "inject_time_unix": 1705540396,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_socket/2"
+    },
+    {
+      "problem_id": "problem_000090",
+      "source_name": "recommendationservice_socket_3",
+      "service": "recommendationservice",
+      "fault": "socket",
+      "run": "3",
+      "answer_rank": "recommendationservice_socket",
+      "inject_time_unix": 1705542843,
+      "source_run_dir": "/mnt/data/logjun/data/log/Benchmarks/RE2-OB/recommendationservice_socket/3"
+    }
+  ]
+}

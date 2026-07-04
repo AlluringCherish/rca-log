@@ -1,0 +1,38 @@
+{
+  "case_id": "problem_000083",
+  "case_start_unix_seconds": 1705582739,
+  "time_unit": "relative_seconds_from_case_start",
+  "start_time": 0,
+  "end_time": 1440,
+  "window_size_seconds": 30,
+  "baseline_window": [
+    0,
+    600
+  ],
+  "warmup_seconds": 120,
+  "z_threshold": 3.0,
+  "services": [
+    "checkoutservice",
+    "currencyservice",
+    "emailservice",
+    "frontend",
+    "paymentservice",
+    "productcatalogservice",
+    "recommendationservice"
+  ],
+  "record_count": 4478,
+  "record_count_by_type": {
+    "call_edge": 573,
+    "metric_summary": 3376,
+    "metric_anomaly": 70,
+    "span_slowdown": 271,
+    "log_pattern": 175,
+    "error_code": 13
+  },
+  "baseline_contamination": {
+    "metric_anomaly": 0.157,
+    "span_slowdown": 0.185,
+    "error_code": 0.0,
+    "log_pattern": 0.006
+  }
+}

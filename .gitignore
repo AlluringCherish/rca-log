@@ -1,6 +1,4 @@
 __pycache__/
 *.pyc
-# Derived/downloaded artifacts (regenerate via preprocess.py; raw benchmark is external)
-data/
 output/
 .DS_Store
