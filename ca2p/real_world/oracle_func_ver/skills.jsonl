@@ -1,0 +1,15 @@
+{"code_interface": "def go_to_ready_pose()", "description": "Move robot to ready position"}
+{"code_interface": "def setTargetPose(x, y, z, roll, pitch, yaw)", "description": "Set target pose for robot movement"}
+{"code_interface": "def setPose0(x, y, z, roll, pitch, yaw)", "description": "Set first pose for pick and place operation"}
+{"code_interface": "def setPose1(x, y, z, roll, pitch, yaw)", "description": "Set second pose for pick and place operation"}
+{"code_interface": "def execute_go()", "description": "Execute movement to the set target pose"}
+{"code_interface": "def execute_pick(gripper_force=5, axis=0)", "description": "Pick object with specified force and approach axis (0=x, 1=y, 2=z)"}
+{"code_interface": "def execute_place(axis=0)", "description": "Place object with specified approach axis (0=x, 1=y, 2=z)"}
+{"code_interface": "def execute_push(gripper_force=5, axis=0, distance=0.1)", "description": "Push object along specified axis for given distance"}
+{"code_interface": "def execute_pull(gripper_force=5, axis=0, distance=0.02)", "description": "Pull object along specified axis for given distance"}
+{"code_interface": "def execute_sweep(axis=0, distance=3)", "description": "Perform sweeping motion along specified axis"}
+{"code_interface": "def execute_rotate(gripper_force=5, axis=0)", "description": "Rotate object around specified axis"}
+{"code_interface": "def execute_gripper(width, force)", "description": "Control gripper with specified width and force"}
+{"code_interface": "def execute_pick_and_place(gripper_force=5, axis=0)", "description": "Combined pick and place operation using pose0 and pose1"}
+{"code_interface": "def current_pose()", "description": "Get current robot pose in Euler angles"}
+{"code_interface": "def getPose()", "description": "Get current pose with adjusted orientation"}
