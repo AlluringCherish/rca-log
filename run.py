@@ -23,7 +23,7 @@ from agent.controller import Controller
 from agent.loop import run_case
 from benchmark.re2_ob import discover_event_cases, evaluate_cases, write_outputs
 from common.llm import LLMClient
-from reasoning.units import TemplateComposer, load_units
+from reasoning.units import UnitDB, load_units
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +36,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-steps", type=int, default=8)
     p.add_argument("--units-path", default="reasoning/seed_units.json")
     p.add_argument("--no-units", action="store_true",
-                   help="Ablation: disable reasoning units (Analyst gets no composed template).")
+                   help="Ablation: disable reasoning units (Analyst gets no reasoning unit).")
+    p.add_argument("--kv-prefix-cache", action="store_true",
+                   help="Cache the Analyst prompt prefix (system+unit) as KV; recompute only the dynamic suffix (local backend only).")
+    p.add_argument("--kv-offload-cpu", action="store_true",
+                   help="Store prefix KV on host RAM and copy to GPU per call (needed when large prefixes x units exceed VRAM).")
+    p.add_argument("--big-prefix", metavar="PATH", nargs="?", const="reasoning/rca_reference.txt", default=None,
+                   help="Append a large fixed RCA reference to the Analyst system prompt (grows the cached prefix to ~20k). Optional path; default reasoning/rca_reference.txt.")
     p.add_argument("--llm-backend", choices=["local", "openai"], default="local")
     p.add_argument("--model", default=None, help="OpenAI/OpenRouter model id.")
     p.add_argument("--local-model", default="/data/models/Qwen3-8B")
@@ -61,9 +67,11 @@ def main() -> None:
     print(f"Discovered {len(discovered)} case(s). Output -> {out_dir}", file=sys.stderr)
 
     units = [] if args.no_units else load_units(args.units_path)
-    composer = TemplateComposer(units)
-    print(f"Reasoning units: {'DISABLED (ablation)' if args.no_units else f'{len(units)} loaded'}",
+    unit_db = UnitDB(units)
+    print(f"Reasoning units: {'DISABLED (ablation)' if args.no_units else f'{len(units)} loaded (single-unit select)'}",
           file=sys.stderr)
+    if args.kv_prefix_cache and args.llm_backend != "local":
+        print("--kv-prefix-cache is only supported by the local backend; ignoring.", file=sys.stderr)
     llm = LLMClient(
         model=args.model,
         temperature=args.temperature,
@@ -72,10 +80,28 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         cpu=args.cpu,
         enable_thinking=args.enable_thinking,
+        kv_prefix_cache=args.kv_prefix_cache,
+        kv_offload_cpu=args.kv_offload_cpu,
     )
     llm.prepare()
+    if args.llm_backend == "local":
+        print(f"Prefix KV-cache: {'ON' if args.kv_prefix_cache else 'OFF'}", file=sys.stderr)
     controller = Controller(llm)
-    analyst = Analyst(llm)
+    if args.big_prefix:
+        from common.prompts import ANALYST_SYSTEM_PROMPT
+        with open(args.big_prefix, encoding="utf-8") as f:
+            reference = f.read()
+        analyst = Analyst(llm, system_prompt=ANALYST_SYSTEM_PROMPT + "\n\n" + reference)
+        print(f"Big prefix: appended {args.big_prefix} to Analyst system prompt.", file=sys.stderr)
+    else:
+        analyst = Analyst(llm)
+
+    # Pre-store each reasoning unit's prefix KV once ("미리 저장") so inference reuses it.
+    if args.kv_prefix_cache and args.llm_backend == "local" and not args.no_units:
+        warm_msgs = [analyst.prefix_messages(up) for up in unit_db.all_unit_prompts()]
+        info = llm.warm_prefixes(warm_msgs)
+        print(f"Warmed {info.get('built', 0)} unit prefixes in {info.get('total_s', 0):.1f}s "
+              f"(registry={info.get('registry_size', 0)})", file=sys.stderr)
 
     parallelism = args.parallelism
     if args.llm_backend == "local" and parallelism != 1:
@@ -84,7 +110,7 @@ def main() -> None:
 
     def process(case) -> Dict[str, Any]:
         print(f"[{case.case_id}] start", file=sys.stderr)
-        record = run_case(case, controller, analyst, composer,
+        record = run_case(case, controller, analyst, unit_db,
                           max_steps=args.max_steps, verbose=args.verbose)
         _write_trace(trace_dir, record)
         pred = record["prediction"]

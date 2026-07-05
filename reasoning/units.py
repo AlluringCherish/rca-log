@@ -1,10 +1,14 @@
-"""Reasoning units and the template composer.
+"""Reasoning-unit DB: storage and single-unit selection.
 
-A reasoning unit is a distilled if-then step: an event-pattern trigger (IF) and a
-CoT fragment with <placeholder> variables (THEN). The composer matches unit
-triggers against the events fetched so far and concatenates the matched units
-into an "analysis procedure" (reasoning template) for the current case. The
-Analyst binds the placeholders from the actual event lines it receives.
+A reasoning unit is a distilled, self-contained diagnostic procedure (SOP): an
+event-pattern trigger (IF) plus a step-by-step reasoning text with <placeholder>
+variables and a worked example (THEN). Given the events fetched so far, UnitDB
+selects the ONE most relevant unit for the current step; the Analyst binds the
+placeholders from the actual event lines.
+
+Because the unit set is a small fixed DB (<=10), each unit's rendered prompt
+prefix can be precomputed once as a KV-state and reused at inference (see
+common/llm.py warm_prefixes).
 """
 
 import json
@@ -21,6 +25,7 @@ class ReasoningUnit:
         self.trigger = spec.get("trigger", {}) or {}
         self.variables = list(spec.get("variables", []))
         self.reasoning = str(spec.get("reasoning", "")).strip()
+        self.example = str(spec.get("example", "")).strip()
 
     @property
     def is_final(self) -> bool:
@@ -76,12 +81,14 @@ def _where_match(where: Dict[str, Any], event: Dict[str, Any]) -> bool:
     return True
 
 
-class TemplateComposer:
-    MAX_NON_FINAL_UNITS = 7
+class UnitDB:
+    """Fixed DB of reasoning units + single-unit selector."""
 
     def __init__(self, units: List[ReasoningUnit], candidates: Optional[Iterable[str]] = None) -> None:
         self.units = units
         self.candidates = {normalize_component(c) for c in (candidates or CANDIDATE_COMPONENTS)}
+
+    # -- trigger evaluation --------------------------------------------------
 
     def _is_candidate_event(self, event: Dict[str, Any]) -> bool:
         attrs = event.get("attrs", {})
@@ -91,20 +98,12 @@ class TemplateComposer:
                 return True
         return False
 
-    def _trigger_fires(self, unit: ReasoningUnit, events: List[Dict[str, Any]], phase: str) -> bool:
+    def _matching_events(self, unit: ReasoningUnit, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         trigger = unit.trigger
-        if unit.is_final:
-            return phase == "final"
-        if unit.is_always:
-            return True
         event_types = set(_as_list(trigger.get("event_type")))
         where = trigger.get("where", {}) or {}
-        min_count = int(trigger.get("min_count", 1))
-        # A candidate-scoped unit only fires on anomalies of a candidate root-cause
-        # service, so noise on supporting services (redis, cart, ...) does not
-        # pull in irrelevant localization units.
         candidate_only = bool(trigger.get("candidate_service"))
-        count = 0
+        out = []
         for event in events:
             if event_types and event.get("type") not in event_types:
                 continue
@@ -112,38 +111,63 @@ class TemplateComposer:
                 continue
             if candidate_only and not self._is_candidate_event(event):
                 continue
-            count += 1
-            if count >= min_count:
-                return True
-        return count >= min_count
+            out.append(event)
+        return out
 
-    def compose(self, events: Iterable[Dict[str, Any]], phase: str = "normal") -> Dict[str, Any]:
+    def _trigger_fires(self, unit: ReasoningUnit, events: List[Dict[str, Any]], phase: str) -> bool:
+        if unit.is_final:
+            return phase == "final"
+        if unit.is_always:
+            return True
+        min_count = int(unit.trigger.get("min_count", 1))
+        return len(self._matching_events(unit, events)) >= min_count
+
+    def _relevance(self, unit: ReasoningUnit, events: List[Dict[str, Any]]) -> float:
+        """Strongest matching-event magnitude (|z|); the always-on fallback scores 0."""
+        if unit.is_always:
+            return 0.0
+        return max((event_magnitude(e) for e in self._matching_events(unit, events)), default=0.0)
+
+    # -- selection -------------------------------------------------------------
+
+    def select_unit(self, events: Iterable[Dict[str, Any]], phase: str = "normal") -> Dict[str, Any]:
+        """Pick the single most relevant unit for the current step's events."""
         events = list(events or [])
         matched = [u for u in self.units if self._trigger_fires(u, events, phase)]
-        matched.sort(key=lambda u: (u.priority, u.id))
 
-        non_final = [u for u in matched if not u.is_final][: self.MAX_NON_FINAL_UNITS]
-        chosen: List[ReasoningUnit] = list(non_final)
         if phase == "final":
-            chosen += [u for u in matched if u.is_final]
+            chosen = [u for u in matched if u.is_final][:1]
+        else:
+            scored = [
+                (self._relevance(u, events), u.priority, u.id, u)
+                for u in matched if not u.is_final
+            ]
+            # highest relevance; tie -> more specific (higher priority number) -> id
+            scored.sort(key=lambda t: (-t[0], -t[1], t[2]))
+            chosen = [scored[0][3]] if scored else []
 
         return {
             "unit_ids": [u.id for u in chosen],
             "variables": _dedupe([v for u in chosen for v in u.variables]),
-            "template_text": self._render(chosen),
+            "unit_text": self.render(chosen[0]) if chosen else "",
         }
 
+    def all_unit_prompts(self) -> List[Dict[str, Any]]:
+        """One selection-shaped dict per unit — used to precompute prefix KV states."""
+        return [
+            {"unit_ids": [u.id], "variables": list(u.variables), "unit_text": self.render(u)}
+            for u in self.units
+        ]
+
+    # -- rendering ---------------------------------------------------------------
+
     @staticmethod
-    def _render(units: List[ReasoningUnit]) -> str:
-        if not units:
-            return ""
-        header = (
-            f"Analysis procedure (composed from {len(units)} reasoning unit(s) matched to this "
-            f"case's events). Follow the steps in order; bind each <placeholder> from the event "
-            f"lines you were given.\n"
-        )
-        blocks = [f"[{i}] {u.name}\n{u.reasoning}" for i, u in enumerate(units, start=1)]
-        return header + "\n\n" + "\n\n".join(blocks)
+    def render(unit: ReasoningUnit) -> str:
+        parts = [f"[{unit.name}]", unit.reasoning]
+        if unit.example:
+            parts.append("")
+            parts.append(unit.example)
+        return "\n".join(parts)
 
 
 def _dedupe(items: List[Any]) -> List[Any]:

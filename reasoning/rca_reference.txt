@@ -1,0 +1,758 @@
+================ RCA REFERENCE MANUAL ================
+
+## 1. Event field semantics
+- metric_anomaly: a per-service KPI deviates from its early-baseline. Fields: kpi (cpu|mem|diskio|socket|latency.p50|latency.p90), peak (window value at the extremum), base (baseline median), z (robust deviation = (value-median)/(1.4826*MAD), bounded to +/-1000), dir (up|down), n_windows (length of the consecutive anomalous run), persistent (n_windows>=2). Interpretation: |z|>=3 anomalous; persistence and a real peak-vs-base gap distinguish a fault from a tight-baseline artifact.
+- metric_summary: per-window value + z of one KPI; use for trajectory (onset time, step vs monotonic shape, magnitude vs baseline).
+- span_slowdown: a caller>callee/operation whose p99 of RAW span duration rose vs its edge baseline. RAW duration includes downstream wait, so a slow CALLER edge is propagation, not a caller fault. Fields: caller, callee, operation, p99_us, baseline_us, z, n.
+- error_code: a caller>callee/operation emitting non-OK status above baseline. Fields: caller, callee, operation, error_count, call_count, status_codes.
+- log_pattern: a per-template log-count deviation or a newly-appearing template for a service. Fields: template_id, level, count, baseline, z, new_template. Use compact fields only; never copy raw template text.
+- call_edge / topology: caller>callee call and error volume; the static call graph structure.
+
+## 2. Reading z and persistence
+- z compares one series to its own early baseline; it is only comparable within the same KPI/service scale. A socket |z| of 30 and a cpu |z| of 300 are NOT on the same footing (socket counts are small integers). Never rank across services/KPIs by raw |z| alone.
+- A near-flat baseline yields MAD~0, so even a tiny bump gives a huge z (tight-MAD artifact); always sanity-check peak vs base for mem-like KPIs.
+- diskio/socket baselines are near zero/constant, so any sustained anomaly is a strong fingerprint of the injected resource, not a side effect.
+- Upward (dir=up) resource/latency deviations are candidate faults; downward moves are throughput/GC effects.
+
+## 3. Candidate and reason space
+- Root-cause component MUST come from the candidate list in case_context (5 Online Boutique services). Non-candidate services (frontend, redis, cartservice, loadgenerator, paymentservice, shippingservice, adservice) are supporting/propagation nodes and can never be the final component.
+- Reason MUST come from {cpu, mem, diskio, latency, socket}. It is the candidate's own faulted KPI family, taken from component-LOCAL metric evidence.
+
+## 4. Online Boutique dependency structure (typical)
+- frontend calls: productcatalogservice, currencyservice, cartservice, recommendationservice, shippingservice, adservice, checkoutservice.
+- checkoutservice calls: productcatalogservice, currencyservice, cartservice, shippingservice, paymentservice, emailservice.
+- recommendationservice calls productcatalogservice; cartservice uses redis.
+- Consequence for tracing: PlaceOrder (frontend>checkoutservice) and its children have the largest raw-duration p99 whenever ANY downstream dependency is slow; that magnitude is propagation, not a checkoutservice fault. Localize by the callee's own latency metric.
+
+## 5. Fault taxonomy and signatures
+- cpu: sustained upward cpu utilization on the service; co-raises its latency (downstream effect).
+- mem: real relative increase in mem bytes, as a step (plateau) or monotonic climb (leak); beware tight-MAD false z.
+- diskio: near-zero baseline jumps to large bytes/s and stays; often co-raises cpu (IO wait).
+- socket: small-integer socket count rises and persists; co-raises cpu (spin/retry). Judge by persistence, not magnitude.
+- latency (delay/loss): the service's own latency.p50/p90 metric rises with NO local resource anomaly; slowdown concentrates on edges into it; loss adds error_code on inbound edges.
+
+## 6. Methodology principles
+- Localize the component with component-LOCAL metric evidence first; use traces/logs to validate propagation and impact, not to localize.
+- Prefer persistent, sustained evidence over single-window spikes.
+- When several KPIs rise on one candidate, identify the single injected resource (most distinctive baseline / largest sustained relative change) and treat the rest as effects.
+- Errors and slow caller edges cascade upward; attribute to the deepest/earliest failing callee, never the relaying caller.
+- Logs confirm timing/impact; they never overturn the metric-derived component/reason.
+- Output exactly three ranked (component, reason) pairs, each justified by cited event ids.
+
+
+================ DETAILED DIAGNOSTIC PLAYBOOK (per KPI) ================
+
+## CPU playbook
+When a candidate shows an upward cpu metric_anomaly:
+- Step C1: Confirm the run is sustained. Read n_windows and persistent. A cpu fault in this benchmark spans the whole post-injection region (many consecutive 30s windows). A single anomalous window is a transient; request metric_summary(kpi=cpu) to see whether the elevation is sustained before trusting it.
+- Step C2: Read the magnitude in context. cpu is a utilization ratio; injected cpu stress drives it far above the service's own baseline (z in the hundreds is common). Compare against the same service's other KPIs to judge which is the primary.
+- Step C3: Check for a masking injected resource on the SAME service. If diskio or socket is also anomalous on this candidate, cpu is very likely a side effect (IO-wait, spin/retry) and the injected resource is diskio/socket; switch reason accordingly.
+- Step C4: Expect and verify downstream effects: the service's latency.p90 rises; inbound span_slowdown edges appear; its log throughput may drop. Presence of these strengthens cpu as root cause; their ABSENCE over many windows suggests the cpu anomaly might be measurement noise on a non-candidate.
+- Step C5: Rank. If cpu is the strongest sustained local signal with no injected-IO competitor, rank1 = service_cpu; place its mem/latency below as secondary/effect.
+- Common mistake: seeing a big trace p99 on the service and switching the reason to latency. Under cpu saturation, latency is the symptom; keep the reason cpu.
+
+## Memory playbook
+When a candidate shows an upward mem metric_anomaly:
+- Step M1: Discard downward mem (dir=down) — that is GC or load falloff, not a fault.
+- Step M2: Reality-check the magnitude. Compute peak vs base. mem in bytes with peak clearly above base (say >1.3x, often many-fold for a leak) is a real fault. A large z with peak ~ base (ratio near 1.0) is a tight-MAD artifact from an almost-flat baseline — downgrade it and prefer a rival candidate with a genuine relative change.
+- Step M3: Classify the trajectory via metric_summary(kpi=mem): a STEP change (jump to a plateau) indicates a sudden allocation; a MONOTONIC climb indicates a leak. Either supports service_mem.
+- Step M4: Cross-modal: allocation/OOM warning logs, a new_template after onset, or restart-like gaps corroborate.
+- Step M5: Rank. Genuine sustained mem with a real gap and one corroboration -> rank1 = service_mem.
+- Common mistake: ranking a non-candidate's mem drift (redis is a frequent offender) or trusting a tight-MAD z.
+
+## Disk IO playbook
+When a candidate shows an upward diskio metric_anomaly:
+- Step D1: diskio baseline is near zero for most services, so a sustained jump to large bytes/s is a decisive injected-resource fingerprint; the large z is REAL here (unlike tight-MAD mem) because the baseline truly was near zero.
+- Step D2: Confirm persistence via metric_summary(kpi=diskio). A disk fault runs for many windows.
+- Step D3: Injected-resource precedence: co-moving cpu (IO-wait) and latency are effects; do not let a co-located cpu with large z override diskio as the reason.
+- Step D4: Rank1 = service_diskio once persistence is confirmed; cpu/latency below as effects.
+- Common mistake: treating diskio as secondary because cpu z is larger — the near-zero-baseline diskio is the injected signal.
+
+## Socket playbook
+When a candidate shows an upward socket metric_anomaly:
+- Step S1: socket counts are small integers with a nearly constant baseline; the z stays modest even for a real fault. Judge primarily by PERSISTENCE across windows, not magnitude.
+- Step S2: cpu on the same service is SUPPORT, not competition: socket exhaustion makes the service spin/retry, raising cpu; a large co-located cpu reinforces socket rather than outranking it.
+- Step S3: Cross-modal: connection-refused/retry/timeout logs or error_code bursts on inbound edges confirm.
+- Step S4: Rank1 = service_socket for a persistent socket rise even when cpu |z| is far larger; cpu below as effect.
+- Common mistake: choosing cpu because 'cpu z is 10x socket z'. This is the single most common error; the injected resource is socket.
+
+## Latency playbook
+When latency signals appear (latency.p50/p90 metric_anomaly and/or span_slowdown):
+- Step L1: Localize with the LOCAL metric. Find the candidate whose own latency.p50/p90 z is highest; the per-service latency metric is the clean localizer.
+- Step L2: Rule out resource cause. If that candidate has any co-located cpu/mem/diskio/socket anomaly, its latency is a symptom -> hand to the resource/injected playbook.
+- Step L3: Confirm direction with traces. span_slowdown should concentrate on edges INTO the candidate (it is the slow callee). Remember raw duration includes downstream wait, so a slow CALLER edge (frontend>X PlaceOrder with huge p99) is EXPECTED propagation; never rank the caller for it.
+- Step L4: For loss faults, follow error_code down the graph to the deepest failing callee; reason stays latency, located by the cascade.
+- Step L5: Rank1 = service_latency when the local metric leads, no resource anomaly exists, and slowdown/errors flow into it.
+- Common mistake: ranking the caller with the biggest edge p99. That p99 is propagation; the callee's local latency metric is the truth.
+
+## Cross-fault arbitration
+When one candidate shows several anomalous KPIs at once, resolve the single injected resource in this order: (1) diskio/socket present and sustained -> injected IO/socket is the reason; (2) else a persistent cpu or mem with a genuine relative change -> that resource; (3) else, if only latency is local and no resource anomaly exists -> latency. Everything else on that service is a downstream effect and is ranked below, never as rank1.
+
+
+================ REASONING UNIT LIBRARY ================
+[Anomaly overview and candidate framing]
+Hypothesis: no single dominant, confirmed signal yet; build the candidate picture and decide what to fetch.
+Evidence interpretation (read before applying the procedure):
+- z is a robust deviation vs the case's early baseline (median/MAD). |z|>=3 is anomalous; |z| in the tens-to-hundreds is strong. But |z| is only comparable WITHIN the same kpi/service scale — a socket |z| of 30 and a cpu |z| of 300 are not on the same footing (socket counts are small integers), so never rank kpis across services by raw |z| alone.
+- persistent=true and n_windows tell you the fault SUSTAINED; injected faults in this system last many consecutive 30s windows. A lone window (persistent=false) is a transient, not a fault.
+- dir=up vs down: resource/latency faults are upward; a downward move is load/throughput falling or GC, i.e. an effect, not a cause.
+- Each candidate is a service; the answer is one (component, reason) where reason is that service's own faulted kpi family (cpu/mem/diskio/socket/latency).
+Procedure:
+1. Bind <metric_anomaly_events> to every metric_anomaly line in the accumulated key events. Group them by (service, kpi).
+2. Restrict candidates: keep ONLY services listed in <candidate_components> (possible_root_cause_components). Every other service seen in events (frontend, redis, cartservice, loadgenerator, ...) is a supporting/propagation node and can NEVER be the final root-cause component, no matter how large its deviation.
+3. For each candidate, bind <per_candidate_kpis>: list its anomalous kpis with (|z|, direction, n_windows, persistent). A kpi is 'strong' when it is upward (dir=up) AND persistent (n_windows>=2 across consecutive windows).
+4. Rank candidates provisionally by (persistence x |z|) on their strongest LOCAL kpi. Local means the kpi is measured on that service itself, not inferred from a trace edge.
+5. Note co-occurring kpis on the SAME candidate: multiple resource kpis rising together (e.g. cpu+mem, or cpu+socket) usually means ONE injected resource plus its side effects; do not treat each as a separate candidate.
+6. Decide the next fetch. For the top candidate, request the evidence a real fault of its strongest kpi would produce, using event-pattern data_requests:
+   - metric_summary(service, kpi) to see the trajectory (onset, step vs monotonic, magnitude vs baseline),
+   - span_slowdown(service) to see whether latency concentrates on edges INTO it,
+   - log_pattern(service) to check timing/impact.
+7. Do NOT conclude or stop at the overview step; it only frames the investigation. Hand off to the specific procedure (resource / injected_io / latency) once a candidate's kpi family is identified.
+Discrimination:
+- A very large |z| on a NON-candidate (e.g. redis_mem drift, frontend latency) is noise for ranking; a smaller but persistent LOCAL kpi on a candidate outranks it.
+- A single-window spike (persistent=false) is weak; prefer sustained runs. Request the trajectory before trusting a lone spike.
+- Downward deviations (dir=down) are almost never a resource fault (GC, load drop, throughput fall); note them as context, not root cause.
+Edge cases:
+- If only non-candidate services are anomalous, report low confidence and request candidate-scoped anomaly/metric data before ranking.
+- If two candidates each have one strong local kpi, keep both in the provisional top-3 and fetch trace/log to disambiguate which is upstream.
+- Warm-up artifacts (very early windows, < ~120s) are suppressed in preprocessing; if you still see an early-only anomaly, treat it as start-up noise.
+- baseline z can be inflated when the baseline barely varied (tight-MAD); a huge z with peak ~ base is weak — verify with the trajectory.
+Additional discrimination:
+- If a candidate shows several kpis anomalous at once, the injected resource is usually the one with the most distinctive baseline (diskio/socket near-zero) or the largest sustained relative change; the rest are effects.
+- Prefer candidates whose anomaly ONSET is close to the others' (same window) — coordinated onset points to a single injected fault and its ripple.
+Additional edge cases:
+- Frontend and loadgenerator latency/error is client-side aggregate; never localize the root cause there.
+- If every candidate looks quiet but one non-candidate is loud, the fault may be a candidate whose signal is masked; request candidate-scoped metric_summary across kpis before concluding.
+Decision checklist (walk in order):
+1. Did I drop every non-candidate service from ranking? (redis/frontend/cart/loadgenerator are never the answer.)
+2. For each candidate, what is its single strongest LOCAL kpi, and is it upward + persistent (n_windows>=2)?
+3. Do several kpis rise together on one candidate? If so, which is the injected resource (most distinctive baseline / largest sustained relative change) and which are effects?
+4. Is my provisional top-1 backed by a candidate-local metric, not a trace edge or a neighbor?
+5. What single fetch would most reduce my uncertainty about top-1's reason? Emit that data_request.
+6. Am I about to stop? If yes, STOP is not allowed at overview — hand off to the specific procedure.
+Common confusions:
+- 'Largest |z| wins' is WRONG across services/kpis: a non-candidate's huge z, or a small-scale kpi's small z (socket), must be weighed by locality and persistence, not raw magnitude.
+- 'Many anomalies = many root causes' is usually WRONG: one injected fault ripples into several kpis; look for the single distinctive source.
+- A downward kpi is not a candidate reason; it is an effect (throughput/GC).
+Example.
+Given key events:
+  [metric_anomaly] id=M0001 window=720-1440 service=serviceA kpi=cpu z=+430 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0005 window=720-1440 service=serviceA kpi=mem z=+41 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0009 window=1020-1080 service=redis kpi=mem z=+38 dir=up n_windows=2 persistent=True
+I bind <metric_anomaly_events>=M0001/M0005/M0009. Candidates={serviceA}; redis is non-candidate (excluded from ranking). <per_candidate_kpis>: serviceA cpu(|z|=430, up, 24w, persistent), mem(|z|=41, up, 24w). cpu and mem rise together on serviceA -> one resource fault with the larger, cleaner signal being cpu. Provisional top-3: [serviceA_cpu, serviceA_mem]. data_requests: [{pattern: metric_summary, service: serviceA, kpi: cpu}, {pattern: span_slowdown, service: serviceA}] to confirm before handing to the resource procedure. Counter: if the only strong anomaly were redis_mem (non-candidate), I would not rank it and would request candidate-scoped data instead.
+
+[CPU / memory saturation localization]
+Hypothesis: a candidate service is saturated on a compute resource — cpu (service_cpu) or memory (service_mem).
+Evidence interpretation (read before applying the procedure):
+- cpu is a utilization ratio; a genuine cpu fault shows a large, sustained upward z (often the biggest, cleanest signal on the service).
+- mem is bytes; a genuine mem fault shows a real relative jump (peak/base clearly > 1) either as a step (sudden plateau) or a monotonic climb (leak). z alone is NOT enough: when a service's mem baseline was almost flat, MAD~0 and even a tiny bump yields a huge z (tight-MAD artifact). Always sanity-check peak vs base for mem.
+- metric_summary lines give the per-window trajectory (value + z) so you can see onset time and shape; request it whenever cpu/mem needs confirmation.
+- co-located latency.p90 rising with cpu/mem is the expected downstream effect, not a second cause.
+This procedure covers BOTH cpu and mem; decide which of the two is the reason for the leading candidate.
+Procedure:
+1. Bind <cpu_events> to cpu metric_anomaly lines and <mem_events> to UPWARD mem lines on candidate services; <other_candidate_events> to other candidates' kpis.
+2. Confirm the signal is real: dir=up and persistent (n_windows>=2 over consecutive windows), not a single-window blip. A resource fault in this benchmark runs for many windows.
+3. Choose cpu vs mem for the SAME candidate by comparing their evidence:
+   - cpu: sustained high utilization; often the largest, cleanest z among a candidate's kpis.
+   - mem: classify the trajectory via metric_summary(kpi=mem) as a STEP change (jump to a plateau) or MONOTONIC growth (leak). Either supports service_mem.
+   - Whichever kpi has the stronger persistence x |z| AND a real relative increase is the reason.
+4. Memory magnitude sanity (critical): check peak/base. A large mem z with peak ~ base (ratio near 1.0) is a tight-MAD artifact (the baseline barely varied), NOT a real leak — downgrade it. Require a clear relative increase (peak well above base).
+5. Same-service cross-check for a DIFFERENT injected resource: if the SAME candidate also shows an upward diskio or socket anomaly, that near-zero-baseline signal is likely the injected resource and cpu/mem may be its side effect — hand off to the injected_io procedure rather than concluding cpu/mem here.
+6. Expected cross-modal effects if cpu/mem is the fault: co-located latency.p90 rises (downstream effect), span_slowdown on edges into the service, log throughput drop or allocation/OOM warnings (for mem). Check the accumulated key events for these.
+7. If evidence is thin, data_requests: {pattern: metric_summary, service, kpi: cpu|mem} (trajectory) and {pattern: span_slowdown, service}.
+8. Verdict: rank1 = service_cpu or service_mem when the chosen kpi is persistent, has a real relative increase, and at least one cross-modal effect is consistent; only then may you stop.
+Discrimination:
+- vs latency: a co-located latency rise is the DOWNSTREAM effect of resource saturation; keep the reason as the resource, not latency, even if trace latency is large.
+- cpu vs mem: use persistence x |z| and, for mem, the peak/base reality check; a tight-MAD mem z loses to a genuine cpu anomaly.
+- vs injected_io: diskio/socket (near-zero baseline) on the same candidate outrank a co-moving cpu/mem as the injected reason (see injected_io unit).
+- non-candidate resource drift (e.g. redis_mem) is excluded regardless of magnitude.
+Edge cases:
+- Downward mem (dir=down) is GC or load drop, never a mem fault; ignore for ranking.
+- A single-window cpu spike with no trajectory: request metric_summary before concluding.
+- cpu and mem both persistent and comparable: pick the one whose trajectory and cross-modal support are cleaner; keep the other at rank2.
+- If mem z is high but peak/base ~ 1.0: treat as weak; a rival candidate's genuine relative increase can outrank it.
+Additional discrimination:
+- If cpu and mem are both anomalous but only mem is tight-MAD (peak~base), the reason is cpu; if only cpu is a lone spike and mem is a sustained real climb, the reason is mem.
+- A resource fault typically also depresses the service's own log throughput (negative log count z) and raises inbound edge p99; absence of ANY such effect over many windows argues the metric anomaly may be measurement noise.
+Additional edge cases:
+- Redis/cart/other non-candidate mem drift is common background; exclude it firmly from ranking even at large |z|.
+- If the trajectory shows the rise beginning only after an unrelated event (deploy/restart gap), re-examine whether it is the injected fault or a recovery artifact.
+Decision checklist (walk in order):
+1. Is the candidate's cpu (or mem) upward AND persistent over consecutive windows, not a single spike?
+2. For mem: is peak clearly above base (real relative jump), or is peak ~ base (tight-MAD artifact to downgrade)?
+3. Between cpu and mem on this candidate, which has the stronger persistence x |z| AND a genuine relative change? That is the reason.
+4. Does the same candidate ALSO show diskio/socket up? If yes, hand off to injected_io (those are the injected resource; cpu/mem may be effects).
+5. Is there at least one cross-modal effect (inbound span_slowdown, log throughput drop, mem OOM/alloc log) consistent with a resource fault?
+6. Only if 1-3 hold and 5 is satisfied: stop with rank1 = service_(cpu|mem).
+Common confusions:
+- High trace latency on this service does NOT make the reason latency; under cpu/mem saturation, latency is the downstream effect.
+- A big mem z with flat trajectory (peak~base) is a baseline artifact, not a leak.
+- cpu on a non-candidate (or a caller) is irrelevant to the candidate's reason.
+Example.
+  [metric_anomaly] id=M0007 service=serviceA kpi=cpu z=+431 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0011 service=serviceA kpi=mem peak=1.6e7 base=1.2e7 z=+41 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0012 service=serviceA kpi=latency.p90 z=+58 dir=up n_windows=8 persistent=True
+  [metric_anomaly] id=M0020 service=serviceB kpi=mem peak=3.1e6 base=3.0e6 z=+30 dir=up n_windows=2 persistent=True
+I bind <cpu_events>=[M0007], <mem_events>=[M0011 (serviceA), M0020 (serviceB)]. serviceA cpu is persistent over 24 windows with the largest, cleanest z (M0007); its mem (M0011, peak/base~1.3x, real but smaller) and latency (M0012) are secondary. serviceB mem (M0020) has peak/base~1.03 -> tight-MAD artifact, downgraded. Conclusion: rank1 = serviceA_cpu (M0007), rank2 = serviceA_mem (M0011); the latency M0012 is a downstream symptom and does not change the reason. Counter: if serviceA also showed an upward socket anomaly, I would hand off to injected_io and prefer socket as the injected reason with cpu as its effect.
+
+[Injected-resource (disk IO / socket) localization]
+Hypothesis: a candidate service has an injected IO/socket fault — disk IO (service_diskio) or socket exhaustion (service_socket).
+Evidence interpretation (read before applying the procedure):
+- diskio (bytes/s) and socket (open-socket count) have baselines at or near zero/constant for most services, so ANY sustained anomaly is a strong fingerprint of the injected resource itself, not a secondary effect.
+- Because socket counts are tiny integers, its z stays modest even for a real fault; weigh PERSISTENCE (many windows) over magnitude. diskio, by contrast, jumps from ~0 to very large, producing an honestly huge z (this is real, unlike a tight-MAD mem z).
+- When diskio/socket rise, cpu (disk wait / socket spin) and latency frequently rise on the same service as consequences; they are supporting evidence, never competitors for the reason.
+These kpis share a decisive property: their baseline is near-zero/constant, so an anomaly is a strong signature of the INJECTED resource rather than a side effect.
+Procedure:
+1. Bind <diskio_events> and <socket_events> to upward anomalies of those kpis on candidate services; <same_service_cpu_mem_events> to the same candidate's cpu/mem anomalies.
+2. diskio: baseline ~0 for most services, so a large SUSTAINED diskio rise on a candidate is decisive. Confirm persistence via metric_summary(kpi=diskio); a disk fault runs for many windows.
+3. socket: counts are small integers with a nearly constant baseline. Judge by PERSISTENCE across windows, not by |z| magnitude (socket z is naturally small). A persistent socket rise on a candidate indicates service_socket.
+4. Injected-resource precedence: cpu/mem/latency often co-rise on the SAME candidate (disk waits raise cpu; socket exhaustion makes the service spin/retry, raising cpu). Treat those as SUPPORT, not competition — they reinforce, they do not outrank, the injected diskio/socket reason.
+5. If both diskio and socket are anomalous on one candidate (rare), pick the one with the clearer sustained trajectory.
+6. Cross-modal: disk faults may show IO-stall logs; socket faults may show connection-refused/retry/timeout logs or error_code bursts on edges into the service. Use them to confirm timing.
+7. Verdict: rank1 = service_diskio or service_socket whenever a candidate has a sustained anomaly of that kpi; rank the co-moving cpu/mem/latency below as effects. Stop is allowed once persistence is confirmed.
+Discrimination:
+- This is the case where raw |z| misleads: a candidate's cpu z can be 10x its socket z, yet SOCKET is the injected resource and wins the reason. Do not let the larger cpu z override.
+- diskio with a very large z from a ~0 baseline is genuine here (unlike tight-MAD mem), because disk activity truly went from near-zero to high.
+- non-candidate diskio/socket (e.g. redis) is excluded.
+Edge cases:
+- A single-window socket bump while cpu is persistent for many windows: prefer cpu and request the socket trajectory before committing to socket.
+- diskio present only as tiny noise (near baseline): ignore.
+- If the injected kpi is present but NOT on a candidate, do not rank it; fall back to the strongest candidate-local signal.
+Additional discrimination:
+- diskio vs socket on the same candidate: choose the one whose sustained window-run is longer and whose onset aligns with the other kpis' ripple.
+- If cpu z >> socket z on the same candidate, this is the classic masking case: still choose socket as the reason (injected), cpu as effect.
+Additional edge cases:
+- socket anomalies that are exactly the constant baseline +/- 1 are noise; require a clear sustained increase.
+- A diskio anomaly whose window-run overlaps only the warm-up region should be discounted.
+Decision checklist (walk in order):
+1. Does a CANDIDATE show an upward diskio or socket anomaly that is sustained (many windows)?
+2. For socket, did I judge by persistence rather than its (small) |z|? For diskio, is the rise from a near-zero baseline (hence its large z is real)?
+3. Are the candidate's co-moving cpu/mem/latency being treated as SUPPORT (effects), not competitors for the reason?
+4. Is there a confirming log/error signal (IO stall, connection-refused/retry/timeout, error_code into the service)?
+5. If persistence is confirmed: rank1 = service_(diskio|socket); place cpu/mem/latency below as effects.
+Common confusions:
+- 'cpu z is 10x socket z, so it is cpu' is WRONG when socket is a sustained near-zero-baseline anomaly: socket is the injected resource, cpu is spin/retry.
+- A one-window socket bump is NOT a socket fault; require a sustained run.
+- diskio/socket on a non-candidate is excluded even if huge.
+Example.
+  [metric_anomaly] id=M0001 service=serviceA kpi=cpu z=+342 dir=up n_windows=9 persistent=True
+  [metric_anomaly] id=M0008 service=serviceA kpi=socket peak=22 base=9 z=+30 dir=up n_windows=24 persistent=True
+By |z|, serviceA cpu (342) dwarfs socket (30). But serviceA socket is up 9->22 and persistent across all 24 windows (M0008) — a near-zero-baseline injected signature; the cpu spike (M0001) is spin/retry from socket exhaustion. I bind <socket_events>=[M0008], <same_service_cpu_mem_events>=[M0001]. Conclusion: rank1 = serviceA_socket (M0008), rank2 = serviceA_cpu (M0001). Counter: had socket risen in only one window while cpu was persistent for 24, I would prefer cpu and request the socket trajectory first.
+
+[Latency root-cause vs propagation (+ error cascade)]
+Hypothesis: a candidate service has an injected latency fault (service_latency, e.g. network delay or packet loss).
+Evidence interpretation (read before applying the procedure):
+- Two latency signals exist and must not be conflated: (a) the PER-SERVICE latency METRIC (kpi latency.p50/p90 in metric_anomaly) measured on the service itself — the clean localizer; (b) EDGE span_slowdown (kpi latency.p99) computed from RAW span duration, which includes time spent waiting on downstream calls.
+- Because (b) includes downstream wait, a caller's edge p99 balloons whenever any callee it invokes is slow — so a large caller edge is EXPECTED propagation, not evidence the caller is faulty. Localize with (a).
+- error_code events carry non-OK status counts per edge; for loss faults they appear on edges into the failing callee and cascade upward. They locate WHERE, and the reason remains the callee's local latency.
+- A candidate that is genuinely latency-faulted shows a high LOCAL latency.p50/p90 z and NO local cpu/mem/diskio/socket anomaly.
+The central challenge is separating a genuine latency root cause from latency that merely PROPAGATED from a slow dependency.
+Procedure:
+1. Bind <latency_metric_events> to latency.p50/p90 metric_anomaly lines on candidates; <span_slowdown_events> to edge span_slowdown lines (kpi latency.p99); <error_code_events> to error_code lines; <call_edge_events> to topology.
+2. Localize by the LOCAL METRIC, not the trace: find the candidate whose own latency.p50/p90 metric z is highest. The per-service latency metric is the least propagation-contaminated signal and is the primary localizer.
+3. Rule out a resource cause: the latency-leading candidate must have NO co-located cpu/mem/diskio/socket anomaly. If it does, its latency is a SYMPTOM of that resource fault — hand off to the resource / injected_io procedure and do not call it service_latency.
+4. Confirm direction with traces: span_slowdown should concentrate on edges INTO the candidate (it is the slow callee). CRITICAL: span_slowdown uses RAW span duration, which includes downstream wait, so a slow CALLER edge (e.g. frontend>X PlaceOrder with huge p99) is EXPECTED propagation from waiting on a slow callee. Never move rank1 to the caller because its edge p99 is large.
+5. Attribute to the deepest / earliest slow callee along <call_edge_events>; callers relaying the delay are propagation.
+6. Error cascade (loss faults): non-OK status codes cascade upward. Walk <error_code_events> down the call graph to the deepest/earliest callee emitting errors; that callee (if a candidate) is the failing dependency. Errors set WHERE, not WHY — take the reason from that callee's local metric (here, its local latency for a loss/delay fault).
+7. Verdict: rank1 = service_latency when the candidate's LOCAL latency metric leads, it has no local resource anomaly, and slowdown/errors flow INTO it. Stop once local latency + one trace/error confirmation are consistent.
+Discrimination:
+- caller vs callee: attribute to the slow callee, never the caller whose big edge p99 only reflects waiting.
+- resource vs latency: a local resource anomaly on the same service wins over latency (latency is then a symptom).
+- client-only errors (frontend>frontend, loadgenerator) are client aborts, not a backend root cause.
+Edge cases:
+- Only span_slowdown present (no local latency metric anomaly on any candidate): this is likely pure propagation; do not declare a latency root cause on trace evidence alone — request metric_anomaly / metric_summary for the suspected callee.
+- Two candidates with elevated local latency: prefer the deeper one (callee of the other) and the one with the larger p50 (median) shift.
+- loss faults can show error_code without a huge latency metric; use the error cascade to localize, reason still latency.
+Example (real latency root cause vs propagation trap).
+  [metric_anomaly] id=M0011 service=serviceA kpi=latency.p50 z=+554 dir=up n_windows=23 persistent=True
+  [span_slowdown] id=S0069 edge=frontend>serviceA op=Convert kpi=latency.p99 p99_us=15718 base_us=740 z=+36
+  [span_slowdown] id=S0102 edge=frontend>serviceB op=PlaceOrder kpi=latency.p99 p99_us=1.6e6 base_us=1.5e5 z=+50
+serviceA has NO resource anomaly, the highest LOCAL latency metric (M0011), and slow edges INTO it (S0069). The bigger caller edge S0102 (frontend>serviceB PlaceOrder) is propagation from waiting on serviceA — I do NOT rank serviceB despite its larger edge p99. I bind <latency_metric_events>=[M0011], <span_slowdown_events>=[S0069, S0102]. Conclusion: rank1 = serviceA_latency (M0011 local metric; S0069 confirms inbound slowdown). Counter: if serviceA also had a local cpu anomaly, its latency would be a symptom and the reason would be cpu, not latency.
+Decision checklist (walk in order):
+1. Which candidate has the highest LOCAL latency.p50/p90 metric z? That is my localization anchor, not any edge p99.
+2. Does that candidate have NO co-located cpu/mem/diskio/socket anomaly? (If it does, latency is a symptom -> hand off.)
+3. Do span_slowdown edges concentrate INTO that candidate (it is the slow callee)?
+4. Am I resisting the propagation trap — i.e., NOT ranking a caller whose raw-duration edge p99 is large merely because it waits on the slow callee?
+5. For loss faults: do error_code events cascade to this callee? Reason stays latency, located by the cascade.
+6. If 1-3 hold: rank1 = service_latency.
+Common confusions:
+- The biggest edge p99 is usually a CALLER (frontend>X), which is propagation; it is NOT the root cause.
+- Trace-only latency with no callee-local latency metric is unlocalized propagation; fetch callee metrics before concluding.
+- A service with both cpu and latency anomalies is a resource fault, not a latency fault.
+
+[Final reranker (+ log confirmation)]
+Hypothesis: produce the final top-3 from all accumulated evidence, using logs only as supporting confirmation.
+Evidence interpretation (read before applying the procedure):
+- You are consolidating accumulated findings into a final ranked answer; weigh evidence by how LOCAL and how SUSTAINED it is.
+- Reason precedence reflects how diagnostic each signal is: a diskio/socket anomaly (near-zero baseline) is the most specific fingerprint; a persistent cpu/mem is next; latency is a valid reason only when it is the service's own metric and no resource anomaly co-exists (otherwise latency is a symptom).
+- logs are impact/timing confirmation, never the primary localizer; a count drop (negative z) or error/new template aligned to the anomaly window supports but cannot overturn the metric verdict.
+- The output must be exactly three (component, reason) pairs drawn only from the candidate lists, each justified by cited event ids.
+Procedure:
+1. Bind <accumulated_rankings> to the running rankings with their cited event ids; <selected_component_metric_evidence> to the strongest LOCAL metrics per candidate; <log_events> to log_pattern lines.
+2. Recompute the reason priority per candidate from local metric evidence:
+   - injected-resource signatures (diskio, socket — near-zero baseline) rank first when present on the candidate,
+   - then a persistent local resource kpi (cpu / mem) by persistence x |z|,
+   - then latency ONLY when the service has no local resource anomaly (genuine delay/loss).
+3. Keep the component with the strongest, most persistent component-LOCAL evidence unless a rival candidate has clearly stronger local evidence.
+4. Log confirmation (supporting only): for the leading candidate, check <log_events> for error/warning templates, a new_template after onset, or a throughput drop (negative count z) time-aligned with its anomaly window. Logs CONFIRM timing/impact; they never change which component/reason the metrics chose. Use compact ids only (e.g. 'L0069 template_id=3 z=-15'); never copy raw template text.
+5. Downgrade latency that rests on trace impact, downstream, or neighbor symptoms rather than a local latency metric. Downgrade a mem whose peak ~ base (tight-MAD).
+6. Emit exactly 3 ranked {component, reason, justification}. Each justification cites event ids. component only from possible_root_cause_components, reason only from possible_root_cause_reasons.
+Discrimination:
+- Never output a non-candidate component (redis, frontend, ...), regardless of how anomalous it looked.
+- Never place latency at rank1 for a service that has a co-located resource anomaly.
+- A single strong injected-resource signature (socket/diskio) outranks a co-moving cpu with larger |z|.
+Edge cases:
+- If fewer than 3 candidates have real evidence, fill remaining slots with the next strongest LOCAL (component, reason) pairs actually observed; do not invent.
+- If logs contradict the metric conclusion, trust the metrics and note the log as unexplained; do not flip the reason on logs alone.
+Additional discrimination:
+- When two candidates tie, prefer the one with the more distinctive kpi (injected-resource fingerprint) and the longer sustained run.
+- Do not let a large but tight-MAD mem, or a large but propagation-only latency, take rank1 over a modest-but-clean local signal.
+Additional edge cases:
+- If accumulated evidence is thin (few anomalies observed), still output three plausible LOCAL pairs by descending strength; mark low confidence in the analysis, not by inventing components.
+- Keep justifications to cited ids and the one-line reason; never paste raw log text.
+Decision checklist (walk in order):
+1. Are all three ranked components in the candidate list (no redis/frontend)?
+2. For each, is the reason its strongest LOCAL kpi under the precedence (injected-resource > persistent cpu/mem > latency-without-resource)?
+3. Did I demote any latency that rests only on trace/propagation, and any mem that is tight-MAD?
+4. Does each justification cite concrete event ids, with logs used only as supporting confirmation?
+5. Are there exactly three (component, reason) pairs, strongest first?
+Common confusions:
+- Ranking a non-candidate because it had the largest anomaly: never do this.
+- Putting latency at rank1 for a service that also has a resource anomaly: the resource is the reason.
+- Letting a log signal flip the metric-derived reason: logs confirm, they do not decide.
+Example.
+Accumulated: serviceA cpu z=+430 persistent (M0007); serviceA socket z=+30 persistent (M0008); serviceB latency.p50 z=+60 (M0031, serviceB has no local resource anomaly). log_events: [log_pattern] id=L0069 service=serviceA template_id=3 z=-15 (throughput drop in serviceA's anomaly window).
+Rerank: serviceA socket is a near-zero-baseline injected signature -> rank1 = serviceA_socket (cpu M0007 is its effect -> rank2 serviceA_cpu); serviceB_latency has a local latency metric with no resource anomaly -> rank3. L0069 confirms serviceA's impact timing but does not change the reason.
+final_ranking = [{component: serviceA, reason: socket, justification: 'persistent socket M0008 (near-zero baseline); cpu M0007 is its effect; log L0069 throughput drop aligns'}, {component: serviceA, reason: cpu, justification: 'local cpu M0007'}, {component: serviceB, reason: latency, justification: 'local latency.p50 M0031, no resource anomaly'}].
+
+================ WORKED WALKTHROUGHS ================
+### Worked walkthrough: resource-cpu with latency ripple
+Observed events:
+  [metric_anomaly] id=M0002 service=serviceA kpi=cpu z=+410 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0006 service=serviceA kpi=mem z=+38 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0009 service=serviceA kpi=latency.p90 z=+55 dir=up n_windows=10 persistent=True
+  [span_slowdown] id=S0044 edge=frontend>serviceA op=Call kpi=latency.p99 p99_us=42000 base_us=1800 z=+40 n=300
+Reasoning:
+serviceA is a candidate. Its cpu (M0002) is the strongest, most persistent local signal; mem (M0006) is smaller; latency (M0009) and the inbound edge slowdown (S0044) are downstream effects of cpu saturation, not separate causes. No diskio/socket present, so the injected resource is cpu.
+Final top-3: [serviceA_cpu (M0002), serviceA_mem (M0006), serviceA_latency (M0009 symptom)]
+
+### Worked walkthrough: injected socket masked by cpu
+Observed events:
+  [metric_anomaly] id=M0001 service=serviceB kpi=cpu z=+330 dir=up n_windows=9 persistent=True
+  [metric_anomaly] id=M0007 service=serviceB kpi=socket peak=24 base=9 z=+31 dir=up n_windows=24 persistent=True
+Reasoning:
+By raw |z| cpu (330) dominates socket (31), but socket has a near-zero-constant baseline and rose 9->24 persistently across all windows (M0007) — a decisive injected-resource fingerprint. The cpu spike (M0001) is spin/retry from socket exhaustion. Do not let the larger cpu z override.
+Final top-3: [serviceB_socket (M0007), serviceB_cpu (M0001 effect), ...]
+
+### Worked walkthrough: disk IO from near-zero baseline
+Observed events:
+  [metric_anomaly] id=M0003 service=serviceC kpi=diskio peak=1.2e10 base=0 z=+1000 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0005 service=serviceC kpi=cpu z=+48 dir=up n_windows=14 persistent=True
+Reasoning:
+serviceC diskio jumped from ~0 to 1.2e10 and sustained (M0003) — an injected disk fault; the large z is real because the baseline was truly near zero (unlike a tight-MAD mem). cpu (M0005) is IO-wait side effect.
+Final top-3: [serviceC_diskio (M0003), serviceC_cpu (M0005 effect), ...]
+
+### Worked walkthrough: latency root cause vs caller propagation
+Observed events:
+  [metric_anomaly] id=M0011 service=serviceD kpi=latency.p50 z=+540 dir=up n_windows=23 persistent=True
+  [span_slowdown] id=S0069 edge=frontend>serviceD op=Convert kpi=latency.p99 p99_us=15000 base_us=740 z=+35 n=770
+  [span_slowdown] id=S0102 edge=frontend>serviceE op=PlaceOrder kpi=latency.p99 p99_us=1.6e6 base_us=1.5e5 z=+50 n=14
+Reasoning:
+serviceD has no resource anomaly but the highest LOCAL latency metric (M0011) and inbound slowdown (S0069). The bigger caller edge S0102 (frontend>serviceE PlaceOrder) is propagation from waiting on serviceD — serviceE is not the root cause despite the larger edge p99.
+Final top-3: [serviceD_latency (M0011, S0069), serviceE_latency (propagation), ...]
+
+### Worked walkthrough: loss fault via error cascade
+Observed events:
+  [error_code] id=E0001 edge=serviceF>serviceG op=Charge error_count=6 call_count=15 status_codes=nonzero_rate=0.40
+  [metric_anomaly] id=M0021 service=serviceG kpi=latency.p90 z=+120 dir=up n_windows=20 persistent=True
+Reasoning:
+Errors appear on serviceF>serviceG (serviceG is the callee/dependency, E0001) and serviceG has a high local latency metric (M0021) with no resource anomaly — a loss-type latency fault. Attribute to serviceG; errors locate WHERE, the local latency metric sets the reason.
+Final top-3: [serviceG_latency (M0021, E0001), ...]
+
+### Worked walkthrough: tight-MAD mem artifact rejected
+Observed events:
+  [metric_anomaly] id=M0031 service=serviceH kpi=mem peak=3.1e6 base=3.0e6 z=+29 dir=up n_windows=6 persistent=True
+  [metric_anomaly] id=M0033 service=serviceI kpi=mem peak=2.6e8 base=1.1e7 z=+40 dir=up n_windows=24 persistent=True
+Reasoning:
+serviceH mem z=+29 looks anomalous but peak/base ~ 1.03 — a tight-MAD artifact, not a real leak; downgrade it. serviceI mem rose 1.1e7->2.6e8 (peak/base ~ 24x) and sustained — a genuine mem fault.
+Final top-3: [serviceI_mem (M0033), ...]
+
+
+================ EXTENDED CASE STUDIES ================
+### Extended case study: two candidates, one is the callee of the other
+Events:
+  [metric_anomaly] id=M0101 service=serviceA kpi=latency.p50 z=+300 dir=up n_windows=22 persistent=True
+  [metric_anomaly] id=M0102 service=serviceB kpi=latency.p90 z=+180 dir=up n_windows=22 persistent=True
+  [span_slowdown] id=S0201 edge=serviceB>serviceA op=Get kpi=latency.p99 p99_us=20000 base_us=900 z=+34 n=210
+  [call_edge] edge=serviceB>serviceA calls=5000 errors=0
+Step-by-step:
+  - Both serviceA and serviceB are candidates with elevated local latency metrics.
+  - The call graph shows serviceB>serviceA, so serviceA is the deeper callee; serviceB calls it.
+  - serviceA has the larger local latency.p50 shift (median, hard to inflate), and the slow edge S0201 flows INTO serviceA.
+  - serviceB's latency is inherited from waiting on serviceA -> propagation.
+  - Neither has a resource anomaly, so the reason is latency, localized to the deepest slow callee.
+Answer: rank1 = serviceA_latency (M0101, S0201); serviceB_latency is propagation (rank2).
+
+### Extended case study: non-candidate has the biggest anomaly
+Events:
+  [metric_anomaly] id=M0110 service=redis kpi=mem z=+90 dir=up n_windows=20 persistent=True
+  [metric_anomaly] id=M0111 service=serviceC kpi=cpu z=+120 dir=up n_windows=18 persistent=True
+Step-by-step:
+  - redis has the largest |z| but redis is NOT in the candidate list, so it can never be the final component.
+  - Among candidates, serviceC has a persistent local cpu anomaly.
+  - Exclude redis from ranking entirely; do not be anchored by its magnitude.
+Answer: rank1 = serviceC_cpu (M0111); redis excluded (non-candidate).
+
+### Extended case study: single-window spike is not a fault
+Events:
+  [metric_anomaly] id=M0120 service=serviceD kpi=cpu z=+9 dir=up n_windows=1 persistent=False
+  [metric_anomaly] id=M0121 service=serviceE kpi=mem peak=2.4e8 base=1.0e7 z=+37 dir=up n_windows=23 persistent=True
+Step-by-step:
+  - serviceD cpu is a single window (persistent=false) — a transient, not a sustained fault.
+  - serviceE mem is sustained over 23 windows with peak/base ~ 24x — a genuine leak.
+  - Prefer the sustained, real-magnitude signal.
+Answer: rank1 = serviceE_mem (M0121); serviceD cpu spike ignored.
+
+### Extended case study: disk fault with cpu and latency ripple
+Events:
+  [metric_anomaly] id=M0130 service=serviceF kpi=diskio peak=9.0e9 base=0 z=+1000 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0131 service=serviceF kpi=cpu z=+70 dir=up n_windows=20 persistent=True
+  [metric_anomaly] id=M0132 service=serviceF kpi=latency.p90 z=+45 dir=up n_windows=16 persistent=True
+Step-by-step:
+  - serviceF diskio rose from ~0 to 9e9 and sustained — a near-zero-baseline injected fingerprint.
+  - Its cpu (IO wait) and latency are downstream effects, despite being real anomalies.
+  - Injected-resource precedence puts diskio first.
+Answer: rank1 = serviceF_diskio (M0130); cpu/latency are effects (rank2/3).
+
+### Extended case study: socket with a much larger cpu
+Events:
+  [metric_anomaly] id=M0140 service=serviceG kpi=cpu z=+380 dir=up n_windows=12 persistent=True
+  [metric_anomaly] id=M0141 service=serviceG kpi=socket peak=26 base=8 z=+33 dir=up n_windows=24 persistent=True
+  [error_code] id=E0140 edge=frontend>serviceG op=Call error_count=3 call_count=40 status_codes=nonzero_rate=0.08
+Step-by-step:
+  - cpu z (380) >> socket z (33), the classic masking case.
+  - socket rose 8->26 and persisted every window (M0141) from a near-constant baseline — injected socket exhaustion.
+  - cpu is spin/retry; the inbound errors (E0140) corroborate socket exhaustion.
+  - Choose socket as the reason despite the larger cpu z.
+Answer: rank1 = serviceG_socket (M0141, E0140); serviceG_cpu is the effect (rank2).
+
+### Extended case study: propagation-only latency with no local metric
+Events:
+  [span_slowdown] id=S0301 edge=frontend>serviceH op=PlaceOrder kpi=latency.p99 p99_us=1.4e6 base_us=1.4e5 z=+48 n=18
+  [span_slowdown] id=S0302 edge=serviceH>serviceI op=Charge kpi=latency.p99 p99_us=9.0e5 base_us=1.2e5 z=+30 n=20
+Step-by-step:
+  - Only edge span_slowdowns are present; no candidate has a local latency METRIC anomaly.
+  - The largest edge is a caller edge (frontend>serviceH PlaceOrder), which is propagation.
+  - Follow the chain: serviceH>serviceI is deeper; but without serviceI's local latency metric, this is unlocalized.
+  - Request metric_anomaly/metric_summary for serviceI before concluding; do not blame the caller serviceH on trace alone.
+Answer: action: fetch serviceI local metrics; provisional rank1 = serviceI_latency pending confirmation.
+
+### Extended case study: mem tight-MAD vs genuine leak across candidates
+Events:
+  [metric_anomaly] id=M0150 service=serviceJ kpi=mem peak=3.05e6 base=3.00e6 z=+28 dir=up n_windows=8 persistent=True
+  [metric_anomaly] id=M0151 service=serviceK kpi=mem peak=5.0e8 base=2.0e7 z=+35 dir=up n_windows=24 persistent=True
+Step-by-step:
+  - serviceJ mem z=+28 but peak/base ~ 1.017 — tight-MAD artifact, not a leak; downgrade.
+  - serviceK mem rose 2e7->5e8 (~25x) and sustained — genuine leak.
+  - Choose the real relative change over the larger-but-flat z.
+Answer: rank1 = serviceK_mem (M0151); serviceJ downgraded.
+
+### Extended case study: cpu fault, latency is symptom not reason
+Events:
+  [metric_anomaly] id=M0160 service=serviceL kpi=cpu z=+260 dir=up n_windows=24 persistent=True
+  [metric_anomaly] id=M0161 service=serviceL kpi=latency.p90 z=+90 dir=up n_windows=20 persistent=True
+  [log_pattern] id=L0160 service=serviceL template_id=7 z=-12 new_template=False
+Step-by-step:
+  - serviceL has a strong sustained local cpu anomaly (M0160) and a latency rise (M0161).
+  - Because a local resource anomaly exists, the latency is a symptom of cpu saturation, not a separate latency fault.
+  - The log throughput drop (L0160) aligns with the cpu window and confirms impact; it does not change the reason.
+Answer: rank1 = serviceL_cpu (M0160); latency M0161 is a symptom (not rank1).
+
+
+================ ADDITIONAL CASE LIBRARY ================
+### Case 000 (cpu)
+Events:
+  [metric_anomaly] id=G000a service=serviceAlpha kpi=cpu z=+60 dir=up n_windows=6 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 001 (mem)
+Events:
+  [metric_anomaly] id=G001a service=serviceBravo kpi=mem peak=3.0e8 base=2.0e7 z=+97 dir=up n_windows=11 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 11 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 002 (diskio)
+Events:
+  [metric_anomaly] id=G002a service=serviceCharlie kpi=diskio peak=5.0e9 base=0 z=+1000 dir=up n_windows=16 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 003 (socket)
+Events:
+  [metric_anomaly] id=G003a service=serviceDelta kpi=socket peak=21 base=10 z=+23 dir=up n_windows=21 persistent=True
+Reasoning: serviceDelta socket persists across 21 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 004 (latency)
+Events:
+  [metric_anomaly] id=G004a service=serviceEcho kpi=latency.p50 z=+208 dir=up n_windows=7 persistent=True
+  [span_slowdown] id=G004b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10044 base_us=900 z=+29 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.
+### Case 005 (cpu)
+Events:
+  [metric_anomaly] id=G005a service=serviceFoxtrot kpi=cpu z=+245 dir=up n_windows=12 persistent=True
+Reasoning: sustained cpu on candidate serviceFoxtrot; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceFoxtrot_cpu.
+### Case 006 (mem)
+Events:
+  [metric_anomaly] id=G006a service=serviceGolf kpi=mem peak=8.0e8 base=1.0e7 z=+282 dir=up n_windows=17 persistent=True
+Reasoning: serviceGolf mem shows a real relative jump (peak >> base) sustained over 17 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceGolf_mem.
+### Case 007 (diskio)
+Events:
+  [metric_anomaly] id=G007a service=serviceHotel kpi=diskio peak=10.0e9 base=0 z=+1000 dir=up n_windows=22 persistent=True
+Reasoning: serviceHotel diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceHotel_diskio.
+### Case 008 (socket)
+Events:
+  [metric_anomaly] id=G008a service=serviceIndia kpi=socket peak=26 base=7 z=+28 dir=up n_windows=8 persistent=True
+Reasoning: serviceIndia socket persists across 8 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceIndia_socket.
+### Case 009 (latency)
+Events:
+  [metric_anomaly] id=G009a service=serviceJuliet kpi=latency.p50 z=+393 dir=up n_windows=13 persistent=True
+  [span_slowdown] id=G009b edge=serviceCharlie>serviceJuliet op=Call kpi=latency.p99 p99_us=10099 base_us=900 z=+34 n=200
+Reasoning: serviceJuliet has the leading LOCAL latency metric and inbound slowdown from serviceCharlie; no resource anomaly, so reason=latency localized to serviceJuliet (the callee).
+Answer: rank1 = serviceJuliet_latency.
+### Case 010 (cpu)
+Events:
+  [metric_anomaly] id=G010a service=serviceAlpha kpi=cpu z=+430 dir=up n_windows=18 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 011 (mem)
+Events:
+  [metric_anomaly] id=G011a service=serviceBravo kpi=mem peak=6.0e8 base=3.0e7 z=+467 dir=up n_windows=23 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 23 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 012 (diskio)
+Events:
+  [metric_anomaly] id=G012a service=serviceCharlie kpi=diskio peak=6.0e9 base=0 z=+1000 dir=up n_windows=9 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 013 (socket)
+Events:
+  [metric_anomaly] id=G013a service=serviceDelta kpi=socket peak=19 base=8 z=+33 dir=up n_windows=14 persistent=True
+Reasoning: serviceDelta socket persists across 14 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 014 (latency)
+Events:
+  [metric_anomaly] id=G014a service=serviceEcho kpi=latency.p50 z=+578 dir=up n_windows=19 persistent=True
+  [span_slowdown] id=G014b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10154 base_us=900 z=+39 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.
+### Case 015 (cpu)
+Events:
+  [metric_anomaly] id=G015a service=serviceFoxtrot kpi=cpu z=+615 dir=up n_windows=24 persistent=True
+Reasoning: sustained cpu on candidate serviceFoxtrot; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceFoxtrot_cpu.
+### Case 016 (mem)
+Events:
+  [metric_anomaly] id=G016a service=serviceGolf kpi=mem peak=4.0e8 base=2.0e7 z=+652 dir=up n_windows=10 persistent=True
+Reasoning: serviceGolf mem shows a real relative jump (peak >> base) sustained over 10 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceGolf_mem.
+### Case 017 (diskio)
+Events:
+  [metric_anomaly] id=G017a service=serviceHotel kpi=diskio peak=11.0e9 base=0 z=+1000 dir=up n_windows=15 persistent=True
+Reasoning: serviceHotel diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceHotel_diskio.
+### Case 018 (socket)
+Events:
+  [metric_anomaly] id=G018a service=serviceIndia kpi=socket peak=24 base=9 z=+38 dir=up n_windows=20 persistent=True
+Reasoning: serviceIndia socket persists across 20 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceIndia_socket.
+### Case 019 (latency)
+Events:
+  [metric_anomaly] id=G019a service=serviceJuliet kpi=latency.p50 z=+763 dir=up n_windows=6 persistent=True
+  [span_slowdown] id=G019b edge=serviceCharlie>serviceJuliet op=Call kpi=latency.p99 p99_us=10209 base_us=900 z=+44 n=200
+Reasoning: serviceJuliet has the leading LOCAL latency metric and inbound slowdown from serviceCharlie; no resource anomaly, so reason=latency localized to serviceJuliet (the callee).
+Answer: rank1 = serviceJuliet_latency.
+### Case 020 (cpu)
+Events:
+  [metric_anomaly] id=G020a service=serviceAlpha kpi=cpu z=+800 dir=up n_windows=11 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 021 (mem)
+Events:
+  [metric_anomaly] id=G021a service=serviceBravo kpi=mem peak=2.0e8 base=1.0e7 z=+837 dir=up n_windows=16 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 16 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 022 (diskio)
+Events:
+  [metric_anomaly] id=G022a service=serviceCharlie kpi=diskio peak=7.0e9 base=0 z=+1000 dir=up n_windows=21 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 023 (socket)
+Events:
+  [metric_anomaly] id=G023a service=serviceDelta kpi=socket peak=29 base=10 z=+23 dir=up n_windows=7 persistent=True
+Reasoning: serviceDelta socket persists across 7 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 024 (latency)
+Events:
+  [metric_anomaly] id=G024a service=serviceEcho kpi=latency.p50 z=+948 dir=up n_windows=12 persistent=True
+  [span_slowdown] id=G024b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10264 base_us=900 z=+29 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.
+### Case 025 (cpu)
+Events:
+  [metric_anomaly] id=G025a service=serviceFoxtrot kpi=cpu z=+85 dir=up n_windows=17 persistent=True
+Reasoning: sustained cpu on candidate serviceFoxtrot; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceFoxtrot_cpu.
+### Case 026 (mem)
+Events:
+  [metric_anomaly] id=G026a service=serviceGolf kpi=mem peak=7.0e8 base=3.0e7 z=+122 dir=up n_windows=22 persistent=True
+Reasoning: serviceGolf mem shows a real relative jump (peak >> base) sustained over 22 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceGolf_mem.
+### Case 027 (diskio)
+Events:
+  [metric_anomaly] id=G027a service=serviceHotel kpi=diskio peak=3.0e9 base=0 z=+1000 dir=up n_windows=8 persistent=True
+Reasoning: serviceHotel diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceHotel_diskio.
+### Case 028 (socket)
+Events:
+  [metric_anomaly] id=G028a service=serviceIndia kpi=socket peak=22 base=7 z=+28 dir=up n_windows=13 persistent=True
+Reasoning: serviceIndia socket persists across 13 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceIndia_socket.
+### Case 029 (latency)
+Events:
+  [metric_anomaly] id=G029a service=serviceJuliet kpi=latency.p50 z=+233 dir=up n_windows=18 persistent=True
+  [span_slowdown] id=G029b edge=serviceCharlie>serviceJuliet op=Call kpi=latency.p99 p99_us=10319 base_us=900 z=+34 n=200
+Reasoning: serviceJuliet has the leading LOCAL latency metric and inbound slowdown from serviceCharlie; no resource anomaly, so reason=latency localized to serviceJuliet (the callee).
+Answer: rank1 = serviceJuliet_latency.
+### Case 030 (cpu)
+Events:
+  [metric_anomaly] id=G030a service=serviceAlpha kpi=cpu z=+270 dir=up n_windows=23 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 031 (mem)
+Events:
+  [metric_anomaly] id=G031a service=serviceBravo kpi=mem peak=5.0e8 base=2.0e7 z=+307 dir=up n_windows=9 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 9 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 032 (diskio)
+Events:
+  [metric_anomaly] id=G032a service=serviceCharlie kpi=diskio peak=8.0e9 base=0 z=+1000 dir=up n_windows=14 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 033 (socket)
+Events:
+  [metric_anomaly] id=G033a service=serviceDelta kpi=socket peak=27 base=8 z=+33 dir=up n_windows=19 persistent=True
+Reasoning: serviceDelta socket persists across 19 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 034 (latency)
+Events:
+  [metric_anomaly] id=G034a service=serviceEcho kpi=latency.p50 z=+418 dir=up n_windows=24 persistent=True
+  [span_slowdown] id=G034b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10374 base_us=900 z=+39 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.
+### Case 035 (cpu)
+Events:
+  [metric_anomaly] id=G035a service=serviceFoxtrot kpi=cpu z=+455 dir=up n_windows=10 persistent=True
+Reasoning: sustained cpu on candidate serviceFoxtrot; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceFoxtrot_cpu.
+### Case 036 (mem)
+Events:
+  [metric_anomaly] id=G036a service=serviceGolf kpi=mem peak=3.0e8 base=1.0e7 z=+492 dir=up n_windows=15 persistent=True
+Reasoning: serviceGolf mem shows a real relative jump (peak >> base) sustained over 15 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceGolf_mem.
+### Case 037 (diskio)
+Events:
+  [metric_anomaly] id=G037a service=serviceHotel kpi=diskio peak=4.0e9 base=0 z=+1000 dir=up n_windows=20 persistent=True
+Reasoning: serviceHotel diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceHotel_diskio.
+### Case 038 (socket)
+Events:
+  [metric_anomaly] id=G038a service=serviceIndia kpi=socket peak=20 base=9 z=+38 dir=up n_windows=6 persistent=True
+Reasoning: serviceIndia socket persists across 6 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceIndia_socket.
+### Case 039 (latency)
+Events:
+  [metric_anomaly] id=G039a service=serviceJuliet kpi=latency.p50 z=+603 dir=up n_windows=11 persistent=True
+  [span_slowdown] id=G039b edge=serviceCharlie>serviceJuliet op=Call kpi=latency.p99 p99_us=10429 base_us=900 z=+44 n=200
+Reasoning: serviceJuliet has the leading LOCAL latency metric and inbound slowdown from serviceCharlie; no resource anomaly, so reason=latency localized to serviceJuliet (the callee).
+Answer: rank1 = serviceJuliet_latency.
+### Case 040 (cpu)
+Events:
+  [metric_anomaly] id=G040a service=serviceAlpha kpi=cpu z=+640 dir=up n_windows=16 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 041 (mem)
+Events:
+  [metric_anomaly] id=G041a service=serviceBravo kpi=mem peak=8.0e8 base=3.0e7 z=+677 dir=up n_windows=21 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 21 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 042 (diskio)
+Events:
+  [metric_anomaly] id=G042a service=serviceCharlie kpi=diskio peak=9.0e9 base=0 z=+1000 dir=up n_windows=7 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 043 (socket)
+Events:
+  [metric_anomaly] id=G043a service=serviceDelta kpi=socket peak=25 base=10 z=+23 dir=up n_windows=12 persistent=True
+Reasoning: serviceDelta socket persists across 12 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 044 (latency)
+Events:
+  [metric_anomaly] id=G044a service=serviceEcho kpi=latency.p50 z=+788 dir=up n_windows=17 persistent=True
+  [span_slowdown] id=G044b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10484 base_us=900 z=+29 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.
+### Case 045 (cpu)
+Events:
+  [metric_anomaly] id=G045a service=serviceFoxtrot kpi=cpu z=+825 dir=up n_windows=22 persistent=True
+Reasoning: sustained cpu on candidate serviceFoxtrot; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceFoxtrot_cpu.
+### Case 046 (mem)
+Events:
+  [metric_anomaly] id=G046a service=serviceGolf kpi=mem peak=6.0e8 base=2.0e7 z=+862 dir=up n_windows=8 persistent=True
+Reasoning: serviceGolf mem shows a real relative jump (peak >> base) sustained over 8 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceGolf_mem.
+### Case 047 (diskio)
+Events:
+  [metric_anomaly] id=G047a service=serviceHotel kpi=diskio peak=5.0e9 base=0 z=+1000 dir=up n_windows=13 persistent=True
+Reasoning: serviceHotel diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceHotel_diskio.
+### Case 048 (socket)
+Events:
+  [metric_anomaly] id=G048a service=serviceIndia kpi=socket peak=18 base=7 z=+28 dir=up n_windows=18 persistent=True
+Reasoning: serviceIndia socket persists across 18 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceIndia_socket.
+### Case 049 (latency)
+Events:
+  [metric_anomaly] id=G049a service=serviceJuliet kpi=latency.p50 z=+73 dir=up n_windows=23 persistent=True
+  [span_slowdown] id=G049b edge=serviceCharlie>serviceJuliet op=Call kpi=latency.p99 p99_us=10539 base_us=900 z=+34 n=200
+Reasoning: serviceJuliet has the leading LOCAL latency metric and inbound slowdown from serviceCharlie; no resource anomaly, so reason=latency localized to serviceJuliet (the callee).
+Answer: rank1 = serviceJuliet_latency.
+### Case 050 (cpu)
+Events:
+  [metric_anomaly] id=G050a service=serviceAlpha kpi=cpu z=+110 dir=up n_windows=9 persistent=True
+Reasoning: sustained cpu on candidate serviceAlpha; co-located latency would be a downstream effect. No injected-IO present.
+Answer: rank1 = serviceAlpha_cpu.
+### Case 051 (mem)
+Events:
+  [metric_anomaly] id=G051a service=serviceBravo kpi=mem peak=4.0e8 base=1.0e7 z=+147 dir=up n_windows=14 persistent=True
+Reasoning: serviceBravo mem shows a real relative jump (peak >> base) sustained over 14 windows — a genuine leak, not tight-MAD.
+Answer: rank1 = serviceBravo_mem.
+### Case 052 (diskio)
+Events:
+  [metric_anomaly] id=G052a service=serviceCharlie kpi=diskio peak=10.0e9 base=0 z=+1000 dir=up n_windows=19 persistent=True
+Reasoning: serviceCharlie diskio rose from ~0 and sustained — near-zero-baseline injected fingerprint; any co-cpu is IO-wait effect.
+Answer: rank1 = serviceCharlie_diskio.
+### Case 053 (socket)
+Events:
+  [metric_anomaly] id=G053a service=serviceDelta kpi=socket peak=23 base=8 z=+33 dir=up n_windows=24 persistent=True
+Reasoning: serviceDelta socket persists across 24 windows from a near-constant baseline — injected socket exhaustion; judge by persistence not magnitude.
+Answer: rank1 = serviceDelta_socket.
+### Case 054 (latency)
+Events:
+  [metric_anomaly] id=G054a service=serviceEcho kpi=latency.p50 z=+258 dir=up n_windows=10 persistent=True
+  [span_slowdown] id=G054b edge=serviceHotel>serviceEcho op=Call kpi=latency.p99 p99_us=10594 base_us=900 z=+39 n=200
+Reasoning: serviceEcho has the leading LOCAL latency metric and inbound slowdown from serviceHotel; no resource anomaly, so reason=latency localized to serviceEcho (the callee).
+Answer: rank1 = serviceEcho_latency.

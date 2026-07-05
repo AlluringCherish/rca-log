@@ -41,9 +41,9 @@ class EventToolRuntime:
         "get_topology",
     }
 
-    ANOMALY_CAP = 40
-    METRIC_CAP = 120
-    TRACE_CAP = 40
+    ANOMALY_CAP = 24
+    METRIC_CAP = 80
+    TRACE_CAP = 24
 
     def __init__(self, event_dir: str) -> None:
         self.store = EventStore(event_dir)

@@ -13,10 +13,33 @@ from typing import Any, Dict, List, Optional
 from agent.analyst import Analyst, DEFAULT_FINDINGS, merge_findings
 from agent.controller import Controller
 from benchmark.re2_ob import Case, ranking_from_final, normalize_ranking
+from events.schema import event_magnitude
 from events.tools import EventToolRuntime, PATTERN_TO_TOOL
-from reasoning.units import TemplateComposer
+from reasoning.units import UnitDB
 
 MAX_TOOL_RETRIES = 2
+
+# Accumulated key-events digest handed to the Analyst each step (cross-step,
+# cross-modal). Per-type quota, strongest |z| first.
+DIGEST_QUOTA = {"metric_anomaly": 12, "span_slowdown": 8, "error_code": 4, "log_pattern": 4}
+
+
+def build_digest(fetched_events: List[Dict[str, Any]], event_index: Dict[str, str]) -> List[str]:
+    best: Dict[str, Dict[str, Any]] = {}
+    for e in fetched_events:
+        eid = e.get("id")
+        if eid and eid not in best and e.get("type") in DIGEST_QUOTA:
+            best[eid] = e
+    by_type: Dict[str, List[Dict[str, Any]]] = {}
+    for e in best.values():
+        by_type.setdefault(e["type"], []).append(e)
+    lines: List[str] = []
+    for etype, quota in DIGEST_QUOTA.items():
+        for e in sorted(by_type.get(etype, []), key=lambda ev: -event_magnitude(ev))[:quota]:
+            ln = event_index.get(e["id"])
+            if ln:
+                lines.append(ln)
+    return lines
 
 REASON_BY_KPI = {
     "cpu": "cpu", "mem": "mem", "diskio": "diskio", "socket": "socket",
@@ -185,7 +208,7 @@ def run_case(
     case: Case,
     controller: Controller,
     analyst: Analyst,
-    composer: TemplateComposer,
+    unit_db: UnitDB,
     max_steps: int = 8,
     verbose: bool = False,
 ) -> Dict[str, Any]:
@@ -195,6 +218,7 @@ def run_case(
     tool_runtime = EventToolRuntime(case.event_dir)
 
     fetched_events: List[Dict[str, Any]] = []
+    event_index: Dict[str, str] = {}  # id -> rendered line, accumulated across steps
     findings: Dict[str, Any] = dict(DEFAULT_FINDINGS)
     analyst_report: Optional[Dict[str, Any]] = None
     data_requests: List[Dict[str, Any]] = []
@@ -203,7 +227,13 @@ def run_case(
     final_ranking: List[Dict[str, Any]] = []
     error: Optional[str] = None
 
+    llm = getattr(controller, "llm", None)
+
+    def drain_metrics() -> List[Dict[str, Any]]:
+        return llm.pop_call_metrics() if llm is not None else []
+
     started = time.perf_counter()
+    drain_metrics()  # clear any stragglers before this case
     try:
         for step in range(1, max_steps + 1):
             # --- Controller plans ---
@@ -213,9 +243,20 @@ def run_case(
             if not tool_calls and data_requests:
                 tool_calls = translate_data_requests(data_requests, case_context)
             if not tool_calls and step == 1:
-                tool_calls = [{"name": "get_anomaly_events",
-                               "args": {"start_time": 0, "end_time": end_time, "services": []},
-                               "reasoning": "default broad anomaly scan"}]
+                # Step-1 bundle: fetch all modalities at once so the Analyst sees a
+                # large, cross-modal observation in its first call (fewer round-trips).
+                tool_calls = [
+                    {"name": "get_anomaly_events",
+                     "args": {"start_time": 0, "end_time": end_time, "services": []},
+                     "reasoning": "broad anomaly scan"},
+                    {"name": "get_trace_events",
+                     "args": {"start_time": 0, "end_time": end_time, "services": [],
+                              "kinds": ["span_slowdown", "error_code"]},
+                     "reasoning": "broad trace scan"},
+                    {"name": "get_topology",
+                     "args": {"start_time": 0, "end_time": end_time},
+                     "reasoning": "topology"},
+                ]
             tool_calls = suppress_repeated_tool_calls(tool_calls, action_history)
             if not tool_calls:
                 # Nothing new to fetch: let the Analyst decide with current evidence.
@@ -236,17 +277,26 @@ def run_case(
                     payload = json.loads(obs["observation"])
                 except (json.JSONDecodeError, TypeError):
                     continue
-                fetched_events.extend(payload.get("events", []))
-                new_lines.extend(payload.get("lines", []))
+                evs = payload.get("events", [])
+                lns = payload.get("lines", [])
+                for ev, ln in zip(evs, lns):
+                    if ev.get("id"):
+                        event_index[ev["id"]] = ln
+                fetched_events.extend(evs)
+                new_lines.extend(lns)
             action_history.append({
                 "step": step,
                 "tool_calls": tool_calls,
                 "statuses": [bool(o.get("status")) for o in observations],
             })
 
-            # --- Compose template + Analyst interprets ---
-            template = composer.compose(fetched_events, phase="normal")
-            report = analyst.analyze(case_context, findings, template, new_lines, step, max_steps)
+            # --- Select reasoning unit + Analyst interprets ---
+            controller_calls = drain_metrics()  # controller decide(s) incl. tool retries
+            unit = unit_db.select_unit(fetched_events, phase="normal")
+            key_events = build_digest(fetched_events, event_index)
+            report = analyst.analyze(case_context, findings, unit, new_lines, step, max_steps,
+                                     key_events=key_events)
+            analyst_calls = drain_metrics()
             findings = merge_findings(findings, report["findings"])
             analyst_report = report
             data_requests = report["data_requests"]
@@ -255,15 +305,16 @@ def run_case(
                 "step": step,
                 "tool_calls": tool_calls,
                 "tool_lines": new_lines,
-                "template_units": template["unit_ids"],
+                "unit_ids": unit["unit_ids"],
                 "analysis": report["analysis"],
                 "rankings": report["findings"]["rankings"],
                 "stop": report["stop"],
                 "data_requests": data_requests,
+                "llm_calls": {"controller": controller_calls, "analyst": analyst_calls},
             })
             if verbose:
                 print(f"  step {step}: tools={[c['name'] for c in tool_calls]} "
-                      f"units={template['unit_ids']} stop={report['stop']} "
+                      f"unit={unit['unit_ids']} stop={report['stop']} "
                       f"top={report['findings']['rankings'][:1]}")
 
             if report["stop"]:
@@ -271,17 +322,17 @@ def run_case(
                     final_ranking = report["final_ranking"]
                     break
                 # stop requested without a valid ranking -> force a final call
-                final = _final_call(analyst, case_context, findings, composer, fetched_events,
-                                    step, max_steps)
+                final = _final_call(analyst, case_context, findings, unit_db, fetched_events,
+                                    build_digest(fetched_events, event_index), step, max_steps)
                 final_ranking = final["final_ranking"]
-                steps.append(_final_step(step, final))
+                steps.append(_final_step(step, final, drain_metrics()))
                 break
         else:
             # budget exhausted without stop -> forced final ranking
-            final = _final_call(analyst, case_context, findings, composer, fetched_events,
-                                max_steps, max_steps)
+            final = _final_call(analyst, case_context, findings, unit_db, fetched_events,
+                                build_digest(fetched_events, event_index), max_steps, max_steps)
             final_ranking = final["final_ranking"]
-            steps.append(_final_step(max_steps, final))
+            steps.append(_final_step(max_steps, final, drain_metrics()))
     except Exception as exc:  # pragma: no cover - runtime/LLM failures
         error = f"{type(exc).__name__}: {exc}"
 
@@ -293,6 +344,7 @@ def run_case(
         prediction = normalize_ranking(
             [f"{r.get('component')}_{r.get('reason')}" for r in findings.get("rankings", [])])
     timing = {"all": round(time.perf_counter() - started, 3)}
+    timing.update(aggregate_llm_metrics(steps))
     return {
         "case": case,
         "prediction": prediction,
@@ -304,19 +356,44 @@ def run_case(
     }
 
 
-def _final_call(analyst, case_context, findings, composer, fetched_events, step, max_steps):
-    template = composer.compose(fetched_events, phase="final")
-    report = analyst.analyze(case_context, findings, template, [], step, max_steps, phase="final")
-    report["template_units"] = template["unit_ids"]
+def aggregate_llm_metrics(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-role sums of the per-call KV/timing metrics, flattened for the report."""
+    roles = ("controller", "analyst")
+    agg = {r: {"n_calls": 0, "cache_hits": 0, "prefill_s": 0.0, "decode_s": 0.0,
+               "total_s": 0.0, "gen_tokens": 0, "cache_build_s": 0.0} for r in roles}
+    for s in steps:
+        for role, calls in (s.get("llm_calls") or {}).items():
+            if role not in agg:
+                continue
+            for m in calls or []:
+                a = agg[role]
+                a["n_calls"] += 1
+                a["cache_hits"] += int(bool(m.get("cache_hit")))
+                a["gen_tokens"] += int(m.get("gen_tokens", 0))
+                for k in ("prefill_s", "decode_s", "total_s", "cache_build_s"):
+                    a[k] += float(m.get(k, 0.0))
+    out: Dict[str, Any] = {}
+    for role in roles:
+        for k, v in agg[role].items():
+            out[f"{role}_{k}"] = round(v, 4) if isinstance(v, float) else v
+    return out
+
+
+def _final_call(analyst, case_context, findings, unit_db, fetched_events, key_events, step, max_steps):
+    unit = unit_db.select_unit(fetched_events, phase="final")
+    report = analyst.analyze(case_context, findings, unit, [], step, max_steps,
+                             phase="final", key_events=key_events)
+    report["unit_ids"] = unit["unit_ids"]
     return report
 
 
-def _final_step(step: int, report: Dict[str, Any]) -> Dict[str, Any]:
+def _final_step(step: int, report: Dict[str, Any], final_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "step": step,
         "phase": "final",
-        "template_units": report.get("template_units", []),
+        "unit_ids": report.get("unit_ids", []),
         "analysis": report["analysis"],
         "final_ranking": report["final_ranking"],
         "stop": True,
+        "llm_calls": {"controller": [], "analyst": final_calls},
     }

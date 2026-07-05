@@ -5,9 +5,9 @@ via `data_requests` in event-pattern vocabulary (not tool names).
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from common.llm import LLMClient
+from common.llm import LLMClient, PREFIX_MARKER
 from common.prompts import ANALYST_SYSTEM_PROMPT, FINAL_RANKING_INSTRUCTIONS, CANDIDATE_REASONS
 
 DEFAULT_FINDINGS: Dict[str, Any] = {"metrics": [], "traces": [], "logs": [], "rankings": []}
@@ -26,17 +26,18 @@ class Analyst:
         self,
         case_context: Dict[str, Any],
         findings: Dict[str, Any],
-        template: Dict[str, Any],
+        unit: Dict[str, Any],
         new_event_lines: List[str],
         step: int,
         max_steps: int,
         phase: str = "normal",
+        key_events: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         is_final = phase == "final"
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": self._render_user_prompt(
-                case_context, findings, template, new_event_lines, step, max_steps)},
+                case_context, findings, unit, new_event_lines, step, max_steps, key_events or [])},
         ]
         if is_final:
             messages.append({"role": "user", "content": FINAL_RANKING_INSTRUCTIONS})
@@ -55,18 +56,47 @@ class Analyst:
             report["stop"] = True
         return report
 
+    def prefix_messages(self, unit: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Messages whose cacheable prefix (system + this unit) should be pre-warmed.
+
+        The dynamic part is a dummy; only the text before PREFIX_MARKER is used."""
+        user = self._render_user_prompt(
+            {}, DEFAULT_FINDINGS, unit, [], 1, 1, [])
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user},
+        ]
+
     # -- rendering ---------------------------------------------------------
 
     def _render_user_prompt(
         self,
         case_context: Dict[str, Any],
         findings: Dict[str, Any],
-        template: Dict[str, Any],
+        unit: Dict[str, Any],
         new_event_lines: List[str],
         step: int,
         max_steps: int,
+        key_events: List[str],
     ) -> str:
-        parts = [
+        # STATIC PREFIX (cacheable): the selected reasoning unit. Byte-identical for
+        # the same unit, so its KV state is precomputed once and reused. PREFIX_MARKER
+        # separates it from the dynamic part; the llm backend splits there for prefix
+        # KV caching (and strips the marker when caching is off).
+        unit_text = str(unit.get("unit_text", "")).strip()
+        if unit_text:
+            variables = unit.get("variables", [])
+            prefix = "\n".join([
+                "Reasoning unit (selected for this step's events; bind these "
+                f"placeholders from the event lines below: {variables}):",
+                unit_text,
+            ])
+        else:
+            prefix = "(no reasoning unit for this step; analyze the events directly)"
+
+        # DYNAMIC SUFFIX: step, case context, accumulated findings, accumulated key
+        # events digest (cross-step/cross-modal), and this step's new event lines.
+        suffix_parts = [
             f"Step {step} of {max_steps}.",
             "",
             "Case context:",
@@ -75,22 +105,13 @@ class Analyst:
             "Accumulated findings (your cumulative state):",
             self._render_findings(findings),
             "",
+            "Accumulated key events so far (all steps, strongest first):",
+            *([f"- {line}" for line in key_events] if key_events else ["- (none)"]),
+            "",
+            "New event lines from this step's tool observations:",
+            *([f"- {line}" for line in new_event_lines] if new_event_lines else ["- (none)"]),
         ]
-        template_text = str(template.get("template_text", "")).strip()
-        if template_text:
-            variables = template.get("variables", [])
-            parts.extend([
-                "Reasoning template (composed from matched units "
-                f"{template.get('unit_ids', [])}; bind these placeholders: {variables}):",
-                template_text,
-                "",
-            ])
-        parts.extend(["New event lines from this step's tool observations:"])
-        if new_event_lines:
-            parts.extend(f"- {line}" for line in new_event_lines)
-        else:
-            parts.append("- (none)")
-        return "\n".join(parts).strip()
+        return prefix + PREFIX_MARKER + "\n".join(suffix_parts)
 
     @staticmethod
     def _render_context(case_context: Dict[str, Any]) -> str:
@@ -136,7 +157,7 @@ class Analyst:
             return state
         for key in ("metrics", "traces", "logs"):
             raw = value.get(key, [])
-            state[key] = [str(item) for item in raw if item is not None][:3] if isinstance(raw, list) else []
+            state[key] = [str(item) for item in raw if item is not None][:5] if isinstance(raw, list) else []
         rankings = value.get("rankings", [])
         norm = []
         if isinstance(rankings, list):
