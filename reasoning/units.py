@@ -14,7 +14,7 @@ common/llm.py warm_prefixes).
 import json
 from typing import Any, Dict, Iterable, List, Optional
 
-from events.schema import CANDIDATE_COMPONENTS, event_magnitude, normalize_component
+from events.schema import CANDIDATE_COMPONENTS, METRIC_ANOMALY, event_magnitude, normalize_component
 
 
 class ReasoningUnit:
@@ -84,6 +84,10 @@ def _where_match(where: Dict[str, Any], event: Dict[str, Any]) -> bool:
 class UnitDB:
     """Fixed DB of reasoning units + single-unit selector."""
 
+    # A directly-measured resource anomaly at/above this |z| preempts the latency
+    # (symptom-prone) unit in selection. Above trigger min_severity (~3) with margin.
+    RESOURCE_MIN = 8.0
+
     def __init__(self, units: List[ReasoningUnit], candidates: Optional[Iterable[str]] = None) -> None:
         self.units = units
         self.candidates = {normalize_component(c) for c in (candidates or CANDIDATE_COMPONENTS)}
@@ -122,11 +126,59 @@ class UnitDB:
         min_count = int(unit.trigger.get("min_count", 1))
         return len(self._matching_events(unit, events)) >= min_count
 
+    _RESOURCE_KPIS = {"cpu", "mem", "diskio", "socket"}
+
+    @staticmethod
+    def _unit_kpis(unit: ReasoningUnit) -> set:
+        return set(_as_list((unit.trigger.get("where") or {}).get("kpi", [])))
+
+    def _is_resource_unit(self, unit: ReasoningUnit) -> bool:
+        kpis = self._unit_kpis(unit)
+        return bool(kpis) and kpis <= self._RESOURCE_KPIS
+
+    def _is_latency_unit(self, unit: ReasoningUnit) -> bool:
+        return "latency" in self._unit_kpis(unit)
+
+    def _latency_is_symptom(self, events: List[Dict[str, Any]]) -> bool:
+        """True iff the candidate with the strongest LOCAL latency metric ALSO has a
+        real resource anomaly (cpu/mem/diskio/socket) on the SAME service — i.e. that
+        latency is a downstream symptom of resource saturation, not a root cause. This
+        is the latency unit's own step L2 applied at the selection layer. Genuine
+        latency faults (delay/loss) show latency with NO co-located resource anomaly,
+        so this returns False and the latency unit is kept."""
+        res_z: Dict[str, float] = {}
+        lat_z: Dict[str, float] = {}
+        for e in events:
+            if e.get("type") != METRIC_ANOMALY:
+                continue
+            svc = normalize_component(e.get("service"))
+            if svc not in self.candidates:
+                continue
+            kpi = str(e.get("attrs", {}).get("kpi", ""))
+            z = event_magnitude(e)
+            if kpi.startswith("latency"):
+                lat_z[svc] = max(lat_z.get(svc, 0.0), z)
+            elif kpi in self._RESOURCE_KPIS:
+                res_z[svc] = max(res_z.get(svc, 0.0), z)
+        if not lat_z:
+            return False
+        top_lat_svc = max(lat_z, key=lambda s: lat_z[s])
+        return res_z.get(top_lat_svc, 0.0) >= self.RESOURCE_MIN
+
     def _relevance(self, unit: ReasoningUnit, events: List[Dict[str, Any]]) -> float:
-        """Strongest matching-event magnitude (|z|); the always-on fallback scores 0."""
+        """Strongest matching *metric_anomaly* magnitude (|z|); always-on fallback = 0.
+
+        Trace events (span_slowdown/error_code) still FIRE a unit's trigger but are
+        EXCLUDED from the relevance score: their raw-duration p99 z saturates the
+        +/-1000 clip, so scoring them would make unit_latency win every fault the
+        moment traces are fetched — contradicting the units' own doctrine (localize by
+        the component-LOCAL metric; a raw-duration edge is propagation). Scoring only
+        by the local metric anomaly aligns selection with that doctrine."""
         if unit.is_always:
             return 0.0
-        return max((event_magnitude(e) for e in self._matching_events(unit, events)), default=0.0)
+        metric_matched = [e for e in self._matching_events(unit, events)
+                          if e.get("type") == METRIC_ANOMALY]
+        return max((event_magnitude(e) for e in metric_matched), default=0.0)
 
     # -- selection -------------------------------------------------------------
 
@@ -144,6 +196,14 @@ class UnitDB:
             ]
             # highest relevance; tie -> more specific (higher priority number) -> id
             scored.sort(key=lambda t: (-t[0], -t[1], t[2]))
+            # Cause-over-symptom: if the top-latency candidate also has a co-located
+            # resource anomaly, its latency is a symptom -> demote the latency unit so a
+            # resource/injected_io unit is chosen. Genuine delay/loss faults have no such
+            # co-located resource anomaly and keep the latency unit.
+            if self._latency_is_symptom(events):
+                demoted = [t for t in scored if not self._is_latency_unit(t[3])]
+                if demoted:
+                    scored = demoted
             chosen = [scored[0][3]] if scored else []
 
         return {

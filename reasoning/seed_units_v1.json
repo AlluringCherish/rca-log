@@ -1,0 +1,160 @@
+{
+  "version": "rca-proto-v1",
+  "description": "Manually seeded if-then reasoning units distilled from RCA analysis traces. Each unit's `trigger` (the IF) is an event-pattern predicate; its `reasoning` (the THEN) is a CoT fragment with <placeholder> variables the Analyst binds from matched events. The composer selects matching units and concatenates them into the analysis procedure for a new case.",
+  "units": [
+    {
+      "id": "unit_anomaly_overview",
+      "name": "Anomaly overview and candidate list",
+      "priority": 10,
+      "trigger": {
+        "always": true
+      },
+      "variables": [
+        "<metric_anomaly_events>",
+        "<candidate_components>"
+      ],
+      "reasoning": "Step: Build the candidate list.\nI list the strongest metric_anomaly events as <metric_anomaly_events>, grouped by service and signal, preferring persistent runs with large |z|.\nI keep only services in <candidate_components> (possible_root_cause_components) as root-cause candidates; other services are supporting or propagation nodes.\nI note, for each candidate, which local signal (cpu, mem, diskio, socket, latency) deviates and how persistently."
+    },
+    {
+      "id": "unit_cpu_anomaly",
+      "name": "CPU saturation localization",
+      "priority": 20,
+      "trigger": {
+        "event_type": "metric_anomaly",
+        "where": {
+          "min_severity": 3.0,
+          "kpi": "cpu"
+        },
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<cpu_metric_events>",
+        "<other_service_metric_events>"
+      ],
+      "reasoning": "Step: CPU check.\nI list cpu metric_anomaly events as <cpu_metric_events>.\nIf one candidate service shows a persistent upward cpu deviation across consecutive windows while <other_service_metric_events> stay near baseline, that service_cpu is a strong root-cause candidate.\nCPU faults often co-raise latency downstream; a co-located cpu anomaly outranks the latency it causes."
+    },
+    {
+      "id": "unit_mem_anomaly",
+      "name": "Memory growth localization",
+      "priority": 20,
+      "trigger": {
+        "event_type": "metric_anomaly",
+        "where": {
+          "direction": "up",
+          "min_severity": 3.0,
+          "kpi": "mem"
+        },
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<mem_metric_events>"
+      ],
+      "reasoning": "Step: Memory check.\nI list upward mem metric_anomaly events as <mem_metric_events>.\nA sustained upward mem deviation (step change or monotonic growth) on a candidate service points to service_mem.\nI ignore downward mem deviations: they are GC or load drops, not a memory fault."
+    },
+    {
+      "id": "unit_diskio_anomaly",
+      "name": "Disk IO localization",
+      "priority": 20,
+      "trigger": {
+        "event_type": "metric_anomaly",
+        "where": {
+          "direction": "up",
+          "min_severity": 3.0,
+          "kpi": "diskio"
+        },
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<diskio_metric_events>"
+      ],
+      "reasoning": "Step: Disk IO check.\nI list upward diskio metric_anomaly events as <diskio_metric_events>.\nDisk activity is near-zero in baseline for most services, so a large sustained diskio deviation on a candidate is a decisive service_diskio signal, even if cpu or latency also move."
+    },
+    {
+      "id": "unit_socket_anomaly",
+      "name": "Socket exhaustion localization",
+      "priority": 20,
+      "trigger": {
+        "event_type": "metric_anomaly",
+        "where": {
+          "direction": "up",
+          "min_severity": 3.0,
+          "kpi": "socket"
+        },
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<socket_metric_events>",
+        "<same_service_cpu_events>"
+      ],
+      "reasoning": "Step: Socket check.\nI list upward socket metric_anomaly events as <socket_metric_events>.\nSocket counts are small in baseline, so persistence matters more than magnitude: a persistent socket rise on a candidate indicates service_socket.\nSocket exhaustion frequently co-raises cpu on the SAME service (<same_service_cpu_events>); when both rise together on one candidate, I prefer socket as the reason because it is the injected resource, with cpu as its effect."
+    },
+    {
+      "id": "unit_latency_propagation_vs_locality",
+      "name": "Latency: root cause vs propagation",
+      "priority": 30,
+      "trigger": {
+        "event_type": [
+          "metric_anomaly",
+          "span_slowdown"
+        ],
+        "where": {
+          "kpi": "latency"
+        },
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<latency_metric_events>",
+        "<span_slowdown_events>",
+        "<call_edge_events>"
+      ],
+      "reasoning": "Step: Latency locality.\nI separate local latency metric_anomaly events <latency_metric_events> (kpi latency.p50/latency.p90) from edge span_slowdown events <span_slowdown_events> (kpi latency.p99).\nspan_slowdown uses RAW span duration, which includes downstream wait, so a slow CALLER edge is expected propagation and is NOT evidence that the caller is the root cause.\nI localize a latency root cause (service_latency, e.g. a delay/loss fault) to the candidate whose OWN latency.p50/p90 METRIC z is the highest, provided it has no co-located cpu/mem/diskio/socket anomaly; trace slowdown into that service only confirms it.\nI do not move rank1 to a caller just because its edge p99 is large; if a service has a co-located resource anomaly, I treat its latency as a symptom of that resource fault."
+    },
+    {
+      "id": "unit_error_code_cascade",
+      "name": "Error-code cascade to deepest callee",
+      "priority": 30,
+      "trigger": {
+        "event_type": "error_code",
+        "min_count": 1,
+        "candidate_service": true
+      },
+      "variables": [
+        "<error_code_events>",
+        "<call_edge_events>"
+      ],
+      "reasoning": "Step: Error cascade.\nI list error_code events as <error_code_events> and follow them along <call_edge_events>.\nErrors cascade upward from the failing dependency, so I attribute them to the deepest or earliest callee emitting non-OK status, not to the callers that merely propagate the failure.\nErrors validate impact and timing but do not by themselves set the reason; I still take the reason from component-local metric evidence."
+    },
+    {
+      "id": "unit_log_confirmation",
+      "name": "Log confirmation of the leading candidate",
+      "priority": 40,
+      "trigger": {
+        "event_type": "log_pattern",
+        "min_count": 1
+      },
+      "variables": [
+        "<same_service_log_events>",
+        "<neighbor_log_events>"
+      ],
+      "reasoning": "Step: Log confirmation.\nI inspect log_pattern events for the leading candidate as <same_service_log_events> and for neighbors as <neighbor_log_events>, using compact fields only (id, template_id, level, z, new_template).\nError/warning templates or new templates on the candidate, or a throughput drop (negative count z) consistent with the anomaly window, confirm timing and impact.\nLogs confirm or add supporting evidence; they never override strong component-local metric evidence, and I never copy raw template text into findings."
+    },
+    {
+      "id": "unit_final_rerank",
+      "name": "Final reason reranker",
+      "priority": 90,
+      "trigger": {
+        "phase": "final"
+      },
+      "variables": [
+        "<accumulated_candidate_rankings>",
+        "<selected_component_metric_evidence>"
+      ],
+      "reasoning": "Step: Final rerank.\nI compare accumulated candidates <accumulated_candidate_rankings> and keep the component with the strongest, most persistent component-local metric evidence unless a rival candidate has stronger local evidence.\nFor the selected component I compare its cpu, mem, diskio, socket, and latency evidence <selected_component_metric_evidence> and set the reason from the strongest LOCAL signal; a diskio or socket signal that is near-zero in baseline outranks a co-moving cpu or latency.\nI downgrade latency when it is supported mainly by trace impact, downstream latency, or neighbor symptoms rather than local metric evidence.\nI output the top-3 as component/reason pairs drawn only from the candidate lists, each with a short justification citing event ids."
+    }
+  ]
+}

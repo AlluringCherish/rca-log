@@ -360,7 +360,8 @@ def aggregate_llm_metrics(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Per-role sums of the per-call KV/timing metrics, flattened for the report."""
     roles = ("controller", "analyst")
     agg = {r: {"n_calls": 0, "cache_hits": 0, "prefill_s": 0.0, "decode_s": 0.0,
-               "total_s": 0.0, "gen_tokens": 0, "cache_build_s": 0.0} for r in roles}
+               "total_s": 0.0, "gen_tokens": 0, "prefix_tokens": 0, "suffix_tokens": 0,
+               "cache_build_s": 0.0} for r in roles}
     for s in steps:
         for role, calls in (s.get("llm_calls") or {}).items():
             if role not in agg:
@@ -370,6 +371,8 @@ def aggregate_llm_metrics(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
                 a["n_calls"] += 1
                 a["cache_hits"] += int(bool(m.get("cache_hit")))
                 a["gen_tokens"] += int(m.get("gen_tokens", 0))
+                a["prefix_tokens"] += int(m.get("prefix_tokens", 0))
+                a["suffix_tokens"] += int(m.get("suffix_tokens", 0))
                 for k in ("prefill_s", "decode_s", "total_s", "cache_build_s"):
                     a[k] += float(m.get(k, 0.0))
     out: Dict[str, Any] = {}

@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
                    help="Store prefix KV on host RAM and copy to GPU per call (needed when large prefixes x units exceed VRAM).")
     p.add_argument("--big-prefix", metavar="PATH", nargs="?", const="reasoning/rca_reference.txt", default=None,
                    help="Append a large fixed RCA reference to the Analyst system prompt (grows the cached prefix to ~20k). Optional path; default reasoning/rca_reference.txt.")
+    p.add_argument("--output-style", choices=["normal", "terse", "cot", "minimal"], default="normal",
+                   help="Analyst output contract: normal (~70-word analysis); terse (unit-amortized, <=20-word analysis); cot (explicit chain-of-thought in analysis, for the no-unit baseline); minimal (next-state fields only, no analysis — reasoning stays in the prefilled unit).")
     p.add_argument("--llm-backend", choices=["local", "openai"], default="local")
     p.add_argument("--model", default=None, help="OpenAI/OpenRouter model id.")
     p.add_argument("--local-model", default="/data/models/Qwen3-8B")
@@ -87,14 +89,15 @@ def main() -> None:
     if args.llm_backend == "local":
         print(f"Prefix KV-cache: {'ON' if args.kv_prefix_cache else 'OFF'}", file=sys.stderr)
     controller = Controller(llm)
+    from common.prompts import build_analyst_system_prompt
+    reference = None
     if args.big_prefix:
-        from common.prompts import ANALYST_SYSTEM_PROMPT
         with open(args.big_prefix, encoding="utf-8") as f:
             reference = f.read()
-        analyst = Analyst(llm, system_prompt=ANALYST_SYSTEM_PROMPT + "\n\n" + reference)
         print(f"Big prefix: appended {args.big_prefix} to Analyst system prompt.", file=sys.stderr)
-    else:
-        analyst = Analyst(llm)
+    analyst = Analyst(llm, system_prompt=build_analyst_system_prompt(args.output_style, reference),
+                      output_style=args.output_style)
+    print(f"Output style: {args.output_style}", file=sys.stderr)
 
     # Pre-store each reasoning unit's prefix KV once ("미리 저장") so inference reuses it.
     if args.kv_prefix_cache and args.llm_backend == "local" and not args.no_units:

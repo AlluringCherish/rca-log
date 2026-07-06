@@ -8,7 +8,12 @@ import json
 from typing import Any, Dict, List, Optional
 
 from common.llm import LLMClient, PREFIX_MARKER
-from common.prompts import ANALYST_SYSTEM_PROMPT, FINAL_RANKING_INSTRUCTIONS, CANDIDATE_REASONS
+from common.prompts import (
+    ANALYST_SYSTEM_PROMPT,
+    FINAL_RANKING_INSTRUCTIONS,
+    FINAL_RANKING_INSTRUCTIONS_MINIMAL,
+    CANDIDATE_REASONS,
+)
 
 DEFAULT_FINDINGS: Dict[str, Any] = {"metrics": [], "traces": [], "logs": [], "rankings": []}
 VALID_PATTERNS = {
@@ -18,9 +23,11 @@ FORBIDDEN_KEYS = ("tool_calls", "tool_call", "completed", "next_action")
 
 
 class Analyst:
-    def __init__(self, llm: LLMClient, system_prompt: str = ANALYST_SYSTEM_PROMPT) -> None:
+    def __init__(self, llm: LLMClient, system_prompt: str = ANALYST_SYSTEM_PROMPT,
+                 output_style: str = "normal") -> None:
         self.llm = llm
         self.system_prompt = system_prompt
+        self.output_style = output_style
 
     def analyze(
         self,
@@ -34,16 +41,26 @@ class Analyst:
         key_events: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         is_final = phase == "final"
+        minimal = self.output_style == "minimal"
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": self._render_user_prompt(
                 case_context, findings, unit, new_event_lines, step, max_steps, key_events or [])},
         ]
         if is_final:
-            messages.append({"role": "user", "content": FINAL_RANKING_INSTRUCTIONS})
+            messages.append({"role": "user", "content":
+                             FINAL_RANKING_INSTRUCTIONS_MINIMAL if minimal else FINAL_RANKING_INSTRUCTIONS})
 
-        required = ("analysis", "stop", "final_ranking") if is_final else ("analysis", "stop")
-        data = self.llm.json_chat(messages, required_keys=required, forbidden_keys=FORBIDDEN_KEYS)
+        # `stop` is NOT required in normal mode: a big prompt occasionally omits it.
+        # In minimal mode the schema drops `analysis` entirely (enforced as a forbidden
+        # key), so require the load-bearing key instead and forbid `analysis`.
+        if minimal:
+            required = ("final_ranking",) if is_final else ("stop",)
+            forbidden = FORBIDDEN_KEYS + ("analysis",)
+        else:
+            required = ("analysis", "final_ranking") if is_final else ("analysis",)
+            forbidden = FORBIDDEN_KEYS
+        data = self.llm.json_chat(messages, required_keys=required, forbidden_keys=forbidden)
 
         report = {
             "analysis": str(data.get("analysis", "")),
@@ -52,6 +69,8 @@ class Analyst:
             "data_requests": self._normalize_data_requests(data.get("data_requests")),
             "final_ranking": self._normalize_final_ranking(data.get("final_ranking")),
         }
+        if not is_final and data.get("stop") is None and report["final_ranking"]:
+            report["stop"] = True
         if is_final:
             report["stop"] = True
         return report

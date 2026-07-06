@@ -113,11 +113,18 @@ RCA constraints:
 - A candidate with repeated, persistent, same-component resource evidence outranks a nearby
   latency symptom.
 
-Stop criteria:
-- Set `stop:true` only when your top candidate has component-local metric evidence for its
-  reason AND at least one cross-modal validation (a trace or log event consistent with it).
+Stop criteria (be thorough — do NOT stop early; investigate more before concluding):
+- Before you may set `stop:true` you MUST have satisfied BOTH:
+  (a) examined your TOP-2 candidates, each backed by its own component-LOCAL metric
+      evidence AND at least one cross-modal validation (a trace or log consistent with it); and
+  (b) for your rank-1 reason, EXPLICITLY discriminated resource vs latency: if that service
+      has any co-located cpu/mem/diskio/socket anomaly, its latency is a downstream SYMPTOM,
+      so the reason must be that resource, not latency. State this discrimination in `analysis`.
+- If either (a) or (b) is not yet met, set `stop:false` and issue data_requests for the
+  missing evidence (the 2nd candidate's metric trajectory, its traces/logs, or the
+  resource-vs-latency check). Prefer gathering more evidence over stopping.
 - When stopping, include `final_ranking` with the top-3 as {{component, reason, justification}},
-  justification <= 25 words citing event ids. When not stopping, give 1-3 concrete data_requests.
+  justification <= 25 words citing event ids.
 
 Output rules (one single-line JSON object only; never include tool_calls or completed):
 - Keep `analysis` under 70 words. Keep findings lists <= 3 short strings with event ids only;
@@ -138,3 +145,93 @@ possible_root_cause_reasons, justification <= 25 words citing event ids. Rank st
 component-local metric evidence; select latency only when it is the strongest component-local signal
 rather than a downstream symptom. Return one single-line JSON object with `analysis`, `findings`,
 `stop`, and `final_ranking`."""
+
+
+# ---------------------------------------------------------------------------
+# Output-style overrides. Appended LAST to the Analyst system prompt so they
+# supersede the base "analysis under 70 words" rule. They change ONLY the amount
+# of text generated in `analysis` — the JSON keys the agent loop consumes
+# (findings, stop, data_requests/final_ranking) are unchanged.
+# ---------------------------------------------------------------------------
+
+# TERSE: the reasoning unit IS the chain of thought, already sitting in the
+# (cached) context. Do not re-decode it; just emit the filled-in conclusion.
+ANALYST_OUTPUT_STYLE_TERSE = """## OUTPUT STYLE: TERSE (supersedes the earlier `analysis` length rule)
+
+The reasoning unit provided to you already contains the chain of thought for this step — it is
+in your context. Do NOT restate it, re-derive it, or narrate its steps. You are LOOKING UP the
+answer through that procedure, not thinking it out in the output. Therefore:
+- `analysis`: AT MOST 20 words. A single-line verdict: the winning component+reason and the one
+  decisive event id. No step-by-step narration, no restating the unit's procedure or examples.
+- Emit `findings`, `stop`, and `data_requests`/`final_ranking` exactly as specified elsewhere.
+Keeping `analysis` this short is the point: minimal decoded tokens because the reasoning was
+supplied, not generated."""
+
+# COT: no reasoning unit is available, so the model must generate the chain of
+# thought itself (in `analysis`) before committing — this is the decode cost the
+# unit amortizes away.
+ANALYST_OUTPUT_STYLE_COT = """## OUTPUT STYLE: EXPLICIT CHAIN-OF-THOUGHT (supersedes the earlier `analysis` length rule)
+
+No reasoning unit is provided, so you must derive the diagnosis yourself, thinking step by step
+IN the `analysis` field before committing to a ranking. There is NO word cap on `analysis` for
+this mode. In `analysis`, explicitly and in full:
+1. Enumerate the candidate components and each one's strongest component-LOCAL metric evidence.
+2. For the leading candidate, state the local metric (kpi, z, persistence) that fixes the reason.
+3. Discriminate resource vs latency: if the leading service has a co-located cpu/mem/diskio/socket
+   anomaly, its latency is a downstream SYMPTOM, so the reason is that resource.
+4. Note the cross-modal (trace/log) evidence that validates or contradicts the pick.
+Write this reasoning out fully — do not abbreviate. Then emit `findings`, `stop`, and
+`data_requests`/`final_ranking` exactly as specified elsewhere."""
+
+
+# MINIMAL: the response schema IS just the next-state fields. Defined positively
+# (as the allowed schema, not "do not emit analysis") — `analysis` is additionally
+# enforced as a forbidden key in Analyst.analyze so the structure is guaranteed.
+# The reasoning lives in the prefilled unit, so nothing but state is decoded.
+ANALYST_OUTPUT_STYLE_MINIMAL = """## OUTPUT STYLE: MINIMAL — your response schema is exactly the next-state fields
+
+Reason SILENTLY using the reasoning unit provided to you (it is your chain of thought, already in
+context). Your response is ONE single-line JSON object matching exactly one of these schemas and
+carrying only what the next step consumes:
+
+While investigating:
+{"findings":{"metrics":["M0010 checkoutservice cpu z=+41 persistent"],"traces":[],"logs":[],"rankings":[{"rank":1,"component":"checkoutservice","reason":"cpu"}]},"stop":false,"data_requests":[{"pattern":"span_slowdown","service":"checkoutservice"}]}
+
+When concluding:
+{"stop":true,"final_ranking":[{"component":"checkoutservice","reason":"cpu","justification":"local cpu z=+41 persistent (M0010)"}]}
+
+The schema holds findings (event ids only), stop, and data_requests OR final_ranking — nothing else.
+The resource-vs-latency discrimination and top-2 examination still GOVERN your pick; run them silently.
+
+STOP RULE for this mode: perform the top-2 examination and the resource-vs-latency discrimination
+SILENTLY; the instant both are satisfied, set `stop:true`. The earlier rule to "state this
+discrimination in `analysis`" does NOT apply here — there is no `analysis` field, so do NOT keep
+investigating merely to write it down. Judge sufficiency from findings/rankings alone and stop."""
+
+
+# Minimal-style final instruction: just stop + final_ranking, no analysis.
+FINAL_RANKING_INSTRUCTIONS_MINIMAL = """The step budget is exhausted. Output the final answer now as
+one single-line JSON object with EXACTLY these keys: `stop` and `final_ranking`:
+{"stop":true,"final_ranking":[{"component":...,"reason":...,"justification":"<=25 words, event ids"}]}.
+`component` from possible_root_cause_components, `reason` from possible_root_cause_reasons. Rank
+strongest to weakest by component-local metric evidence; latency only when it is the strongest local
+signal, not a downstream symptom."""
+
+
+def build_analyst_system_prompt(style: str = "normal", reference: str = None) -> str:
+    """Assemble the Analyst system prompt (the cacheable prefix base).
+
+    Order: base prompt, then the big reference (if any), then the output-style
+    override LAST so it wins. `style` in {normal, terse, cot, minimal}."""
+    parts = [ANALYST_SYSTEM_PROMPT]
+    if reference:
+        parts.append(reference)
+    if style == "terse":
+        parts.append(ANALYST_OUTPUT_STYLE_TERSE)
+    elif style == "cot":
+        parts.append(ANALYST_OUTPUT_STYLE_COT)
+    elif style == "minimal":
+        parts.append(ANALYST_OUTPUT_STYLE_MINIMAL)
+    elif style not in ("normal", None):
+        raise ValueError(f"unknown output style: {style!r}")
+    return "\n\n".join(parts)

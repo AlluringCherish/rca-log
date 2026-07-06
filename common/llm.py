@@ -568,6 +568,8 @@ class LLMClient:
         required_keys: Iterable[str],
         forbidden_keys: Iterable[str] = (),
     ) -> Dict[str, Any]:
+        required_keys = tuple(required_keys)
+        forbidden_keys = tuple(forbidden_keys)
         correction_messages = list(messages)
         if getattr(self.backend, "enable_thinking", False):
             correction_messages.append(
@@ -604,7 +606,15 @@ class LLMClient:
                             {"role": "assistant", "content": raw},
                             {
                                 "role": "user",
-                                "content": "Return exactly one valid JSON object only.",
+                                "content": (
+                                    "That was not valid JSON. Return exactly ONE FLAT JSON object. "
+                                    f"It MUST include top-level keys: {', '.join(required_keys)}"
+                                    + (f"; and MUST NOT include: {', '.join(forbidden_keys)}."
+                                       if forbidden_keys else ".")
+                                    + " Keep it one flat object — do NOT open a new '{' before "
+                                    "`stop`/`data_requests`/`final_ranking`; they sit at the top "
+                                    "level, not nested inside `findings`."
+                                ),
                             },
                         ]
                     )
